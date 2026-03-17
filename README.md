@@ -166,6 +166,191 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ---
 
+## Integration Guides
+
+The server communicates over **stdio** (standard MCP transport), so it works with any MCP-compatible client. After cloning and running `npm install`, follow the guide for your client below.
+
+> In all examples replace `/absolute/path/to/wso2-apim-mcp-server` with the real path on your machine.
+
+---
+
+### GitHub Copilot CLI
+
+**Config file:** `~/.copilot/mcp-config.json`
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"],
+      "description": "WSO2 APIM 4.6.0 distributed deployment manager"
+    }
+  }
+}
+```
+
+Verify inside the CLI:
+```
+/mcp
+```
+
+---
+
+### Claude Desktop
+
+**Config file locations:**
+| OS | Path |
+|----|------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/claude/claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop after saving. A 🔌 icon in the chat confirms the server is connected.
+
+---
+
+### VS Code (GitHub Copilot / Agent mode)
+
+**Option A — User-level** (applies to all projects):
+
+Open Command Palette → `Preferences: Open User Settings (JSON)` and add:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "wso2-apim": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+      }
+    }
+  }
+}
+```
+
+**Option B — Workspace-level** (per project):
+
+Create `.vscode/mcp.json` in your project root:
+
+```json
+{
+  "servers": {
+    "wso2-apim": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Switch Copilot Chat to **Agent mode** (`@` → select agent) to use the tools.
+
+---
+
+### Cursor
+
+**Config file:** `~/.cursor/mcp.json`  *(or `.cursor/mcp.json` inside a project for workspace scope)*
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Restart Cursor. The server appears under **Settings → MCP**.
+
+---
+
+### Windsurf (Codeium)
+
+**Config file:** `~/.codeium/windsurf/mcp_config.json`
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Restart Windsurf. Tools become available in the **Cascade** AI panel.
+
+---
+
+### Zed
+
+**Config file:** `~/.config/zed/settings.json`
+
+```json
+{
+  "context_servers": {
+    "wso2-apim": {
+      "command": {
+        "path": "node",
+        "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+      },
+      "settings": {}
+    }
+  }
+}
+```
+
+---
+
+### Continue.dev
+
+**Config file:** `~/.continue/config.json`
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "wso2-apim",
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  ]
+}
+```
+
+---
+
+### Quick Reference
+
+| Client | Config file | Restart required |
+|--------|-------------|-----------------|
+| GitHub Copilot CLI | `~/.copilot/mcp-config.json` | New session (`/mcp`) |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | Yes |
+| VS Code | User `settings.json` or `.vscode/mcp.json` | Reload window |
+| Cursor | `~/.cursor/mcp.json` | Yes |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | Yes |
+| Zed | `~/.config/zed/settings.json` | Yes |
+| Continue.dev | `~/.continue/config.json` | Yes |
+
+---
+
 ## License
 
 MIT
