@@ -22,6 +22,16 @@
     "username": "admin",
     "password": "admin"
   },
+  "zips": {
+    "tm":  "/path/to/wso2am-tm-4.6.0.17.zip",
+    "acp": "/path/to/wso2am-acp-4.6.0.18.zip",
+    "km":  "/path/to/wso2am-acp-4.6.0.18.zip",
+    "gw":  "/path/to/wso2am-universal-gw-4.6.0.zip"
+  },
+  "jdbcDriver": {
+    "version": "8.0.29",
+    "downloadUrl": "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.29/mysql-connector-java-8.0.29.jar"
+  },
   "components": {
     "km": {
       "label": "Key Manager",
