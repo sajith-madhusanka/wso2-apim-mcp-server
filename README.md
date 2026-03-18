@@ -3,7 +3,8 @@
 > **Branch:** `cp-tm-gw` — **3-node topology** (Control Plane + Traffic Manager + Gateway)
 > For the 4-node setup with a separate Key Manager, see branch [`cp-tm-gw-km`](../../tree/cp-tm-gw-km).
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** (Traffic Manager, API Control Plane, Universal Gateway) with MySQL.
+
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** (Traffic Manager, Key Manager, API Control Plane, Universal Gateway) with MySQL.
 
 Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli) or any MCP-compatible client (Claude Desktop, VS Code, etc.).
 
@@ -12,26 +13,32 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
 ## Deployment Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  WSO2 APIM 4.6.0 Distributed                │
-├──────────────────┬──────────────────┬───────────────────────┤
-│  Traffic Manager │ API Control Plane│   Universal Gateway   │
-│  (TM) port 9445  │ (ACP) port 9443  │  (GW) port 9444       │
-│  offset: 2       │  offset: 0       │  offset: 1            │
-│                  │                  │  API: 8244 / 8281      │
-└──────────────────┴──────────────────┴───────────────────────┘
-         │                  │                    │
-         └──────────────────┴────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│               WSO2 APIM 4.6.0 Distributed (4-node)                │
+├───────────────┬───────────────┬─────────────────┬──────────────────┤
+│Traffic Manager│  Key Manager  │API Control Plane│Universal Gateway │
+│  (TM) :9445   │  (KM) :9446   │  (ACP) :9443    │   (GW) :9444     │
+│  offset: 2    │  offset: 3    │  offset: 0      │   offset: 1      │
+│               │               │                 │   API: 8244/8281 │
+└──────┬────────┴───────┬───────┴────────┬────────┴──────────┬───────┘
+       │                │                │                   │
+       │   Token validation (KM→GW)      │ Artifact sync     │
+       │   KM ←→ ACP key mgmt (9446)     │ ACP→GW (9443)     │
+       │                │                │                   │
+       │   Event hub JMS (5672) ACP→KM, ACP→GW              │
+       │                                                      │
+       └──────────── Throttle events :9613 / :9713 ───────────┘
                             │
                 ┌───────────────────────┐
                 │  MySQL (localhost:3306)│
-                │  APIM_46_AM_DB         │
-                │  APIM_46_SHARED_DB     │
+                │  APIM_46_AM_DB         │  ← ACP, TM, KM
+                │  APIM_46_SHARED_DB     │  ← All nodes
                 └───────────────────────┘
 ```
 
-**Start order:** TM → ACP → GW  
-**Portal URLs (ACP):** `https://localhost:9443/publisher` | `/devportal` | `/admin`
+**Start order:** TM → KM → ACP → GW  
+**Portal URLs (ACP):** `https://localhost:9443/publisher` | `/devportal` | `/admin`  
+**Key Manager Management URL:** `https://localhost:9446/carbon/`
 
 ---
 
@@ -41,6 +48,7 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
 - **MySQL 8.x** running locally
 - WSO2 APIM 4.6.0 ZIPs extracted into your `baseDir`:
   - `wso2am-tm-4.6.0` (from `wso2am-tm-4.6.0.17.zip`)
+  - `wso2am-km-4.6.0` (extracted from `wso2am-acp-4.6.0.18.zip` — KM uses the ACP binary with `bin/key-manager.sh`)
   - `wso2am-acp-4.6.0` (from `wso2am-acp-4.6.0.18.zip`)
   - `wso2am-universal-gw-4.6.0` (from `wso2am-universal-gw-4.6.0.zip`)
 - MySQL JDBC connector JAR (`mysql-connector-java-8.x.jar`) copied into each component's `repository/components/lib/`
@@ -67,12 +75,22 @@ Edit `config.json`:
 
 ```jsonc
 {
-  "baseDir": "/path/to/your/distributed_deployment",  // ← change this
+  "baseDir": "/path/to/your/distributed_deployment",      // ← change this
+  "zips": {
+    "tm":  "/path/to/wso2am-tm-4.6.0.17.zip",            // ← change this
+    "acp": "/path/to/wso2am-acp-4.6.0.18.zip",           // ← change this
+    "km":  "/path/to/wso2am-acp-4.6.0.18.zip",           // same as acp
+    "gw":  "/path/to/wso2am-universal-gw-4.6.0.zip"      // ← change this
+  },
+  "jdbcDriver": {
+    "version": "8.0.29",
+    "downloadUrl": "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.29/mysql-connector-java-8.0.29.jar"
+  },
   "mysql": {
     "host": "127.0.0.1",
     "port": 3306,
     "adminUser": "root",
-    "adminPassword": "your-mysql-root-password"       // ← change this
+    "adminPassword": "your-mysql-root-password"           // ← change this
   },
   ...
 }
@@ -115,17 +133,34 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ---
 
+## Quick Start (First-Time Setup)
+
+After cloning, configuring `config.json`, and registering the MCP server, run these prompts **in order**:
+
+```
+1. "Extract all WSO2 APIM components"
+2. "Download and install the MySQL JDBC driver"
+3. "Set up the APIM databases"
+4. "Start all APIM components"
+```
+
+The MCP server handles extraction, driver installation, database init, and sequenced startup automatically.
+
+---
+
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
+| `extract_components` | Extract component ZIPs into `baseDir` — KM auto-renamed from ACP zip |
+| `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
+| `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `start_component` | Start one component: `tm`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
 | `start_all` | Start all 3 components in correct order (TM → ACP → GW), halts on first failure |
-| `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
+| `stop_component` | Gracefully stop one component (`tm`, `acp`, or `gw`) using its shutdown script |
 | `stop_all` | Stop all 3 components in correct order (GW → ACP → TM) |
 | `check_status` | Live status of all 3 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
-| `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `get_deployment_info` | Full topology, ports, credentials, and known issue fixes |
 
 ## Available Resources
@@ -135,6 +170,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 | `apim://config` | Full deployment config as JSON |
 | `apim://toml/acp` | Live `deployment.toml` for ACP |
 | `apim://toml/tm` | Live `deployment.toml` for TM |
+| `apim://toml/km` | Live `deployment.toml` for KM |
 | `apim://toml/gw` | Live `deployment.toml` for GW |
 
 ---
@@ -142,13 +178,67 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ## Example Prompts
 
 ```
-"Start the WSO2 Traffic Manager"
+"Extract all WSO2 APIM components"
+"Extract only the Traffic Manager"
+"Download and install the MySQL JDBC driver"
+"Set up the APIM databases"
 "Start all APIM components"
+"Start the WSO2 Traffic Manager"
+"Start the Key Manager"
 "Stop all APIM components"
 "Check status of all APIM components"
 "Show errors from the ACP logs"
-"Set up the MySQL databases for APIM"
 "What are the gateway API endpoints?"
+```
+
+---
+
+## Key Manager Node
+
+The Key Manager is a **dedicated token-validation and key-management plane** that offloads OAuth2/JWT operations from the API Control Plane.
+
+### How it works
+
+| Concern | Details |
+|---------|---------|
+| **Binary** | Uses the ACP zip (`wso2am-acp-4.6.0.18.zip`) — the script `bin/key-manager.sh` activates the KM profile |
+| **Port** | HTTPS **9446** (offset 3), HTTP 9766 |
+| **Databases** | `APIM_46_AM_DB` + `APIM_46_SHARED_DB` (same MySQL users as ACP) |
+| **Event hub** | Subscribes to ACP JMS at `tcp://localhost:5672` for key management events |
+| **Token validation** | Gateway calls `https://localhost:9446/services/` for every inbound API request |
+
+### Node connectivity
+
+```
+GW  ──(token validation)──▶  KM :9446
+ACP ──(key manager config)──▶ KM :9446
+KM  ──(event hub subscribe)──▶ ACP JMS :5672
+```
+
+### `deployment.toml` highlights
+
+```toml
+[server]
+hostname = "localhost"
+server_role = "key-manager"
+offset = 3
+
+[apim.event_hub]
+enable = true
+service_url = "https://localhost:9443/services/"
+event_listening_endpoints = ["tcp://localhost:5672"]
+```
+
+### Starting the Key Manager
+
+```bash
+./distributed_deployment/wso2am-km-4.6.0/bin/key-manager.sh start
+```
+
+Or via MCP tool:
+
+```
+"Start the Key Manager"
 ```
 
 ---
@@ -388,6 +478,7 @@ claude mcp list
 Then use it interactively:
 ```
 claude> Start the Traffic Manager
+claude> Start the Key Manager
 claude> Check status of all APIM components
 ```
 
@@ -412,16 +503,33 @@ claude> Check status of all APIM components
 
 MIT
 
+---
+
 ## Changelog
 
+### v1.3.0 — Extract Components + JDBC Driver Setup
+- New `extract_components` tool: unzips TM/ACP/GW into `baseDir`
+- New `setup_jdbc_driver` tool: downloads MySQL connector from Maven Central and copies to all component lib dirs
+- `config.json` now supports `zips` (per-component zip paths) and `jdbcDriver` sections
+- Full zero-to-running setup via MCP prompts only
+
 ### v1.2.0 — Graceful Stop + start_all / stop_all
-- `stop_component` now calls the proper shutdown script instead of `kill -9`
+- `stop_component` now calls the proper shutdown script (`gateway.sh stop` etc.) instead of `kill -9`
 - Polls every 2s (up to 30s) to confirm the process has exited
-- New `stop_all` tool: stops GW → ACP → TM in one command
-- New `start_all` tool: starts TM → ACP → GW, halts on first failure
+- New `stop_all` tool: stops GW → ACP → KM → TM in one command
+- New `start_all` tool: starts TM → KM → ACP → GW, halts on first failure
+
+### v1.1.0 — Key Manager Node + Rapid Startup Polling
+- New `wso2am-km-4.6.0` node extracted from ACP zip (`bin/key-manager.sh`)
+- Port offset **3** → Management HTTPS: **9446**, HTTP: **9766**
+- ACP and Gateway `[apim.key_manager]` now point to `https://localhost:9446/services/`
+- KM subscribes to ACP event hub for key management events (`tcp://localhost:5672`)
+- `start_component` now polls the log every **2 seconds** (up to 90s) and returns actual startup time + Management URL
+- Updated MCP tools/resources to include `km` in all enums and `apim://toml/km` resource
+- **Updated start order: TM → KM → ACP → GW**
 
 ### v1.0.0 — Initial Release
 - 3-node topology: TM, ACP, GW
 - MySQL database setup (`setup_databases` tool)
 - `start_component`, `stop_component`, `check_status`, `view_logs`, `get_deployment_info`
-- Multi-agent integration guides (Copilot CLI, Claude CLI, Claude Desktop, VS Code, Cursor, Windsurf, Zed, Continue.dev)
+- Multi-agent integration guides (Copilot CLI, Claude Desktop, VS Code, Cursor, Windsurf, Zed, Continue.dev)

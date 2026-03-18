@@ -75,7 +75,7 @@ const server = new McpServer({
 // ── Tool: start_component ────────────────────────────────────────────────────
 server.tool(
   "start_component",
-  "Start a WSO2 APIM 4.6.0 component. Start order: tm → acp → gw.",
+  "Start a WSO2 APIM 4.6.0 component (tm | acp | gw). Start order: tm → acp → gw.",
   { component: z.enum(["tm", "acp", "gw"]).describe("Component to start: tm, acp, or gw") },
   async ({ component }) => {
     const c = CONFIG.components[component];
@@ -139,7 +139,7 @@ server.tool(
 // ── Tool: stop_component ─────────────────────────────────────────────────────
 server.tool(
   "stop_component",
-  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | acp | gw). Stop order: GW → ACP → TM.",
+  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). Stop order: GW → ACP → TM.",
   { component: z.enum(["tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
@@ -274,7 +274,7 @@ server.tool(
 // ── Tool: check_status ───────────────────────────────────────────────────────
 server.tool(
   "check_status",
-  "Check running status of all WSO2 APIM 4.6.0 components (tm, acp, gw).",
+  "Check running status of all WSO2 APIM 4.6.0 components.",
   {},
   async () => {
     const rows = Object.entries(CONFIG.components).map(([key, c]) => {
@@ -433,6 +433,135 @@ ${"═".repeat(55)}
 `,
     }],
   })
+);
+
+// ── Tool: extract_components ─────────────────────────────────────────────────
+server.tool(
+  "extract_components",
+  "Extract WSO2 APIM component ZIP files into the base directory. ZIP paths must be set in config.json under 'zips'. KM is extracted from the ACP zip and renamed automatically.",
+  {
+    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+      .describe("Which component to extract, or 'all' for all components"),
+    overwrite: z.boolean().default(false)
+      .describe("If true, delete and re-extract even if the directory already exists"),
+  },
+  async ({ component, overwrite }) => {
+    const zips = CONFIG.zips;
+    if (!zips) {
+      return { content: [{ type: "text", text: "❌ 'zips' section missing from config.json. Add zip paths for each component." }] };
+    }
+
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const zipPath = zips[key];
+      const targetDir = `${CONFIG.baseDir}/${c.dir}`;
+
+      if (!zipPath) {
+        results.push(`⚠️  ${c.label} — no zip path in config.zips.${key}`);
+        continue;
+      }
+      if (!existsSync(zipPath)) {
+        results.push(`❌ ${c.label} — zip not found: ${zipPath}`);
+        continue;
+      }
+
+      if (existsSync(targetDir)) {
+        if (!overwrite) {
+          results.push(`⏭️  ${c.label} — already extracted at ${targetDir} (use overwrite:true to re-extract)`);
+          continue;
+        }
+        await execAsync(`rm -rf "${targetDir}"`);
+      }
+
+      try {
+        // Get the root directory name packed inside the zip
+        const { stdout: zipList } = await execAsync(`unzip -Z1 "${zipPath}" | head -1`);
+        const packedRoot = zipList.trim().replace(/\/$/, "").split("/")[0];
+        const extractedDir = `${CONFIG.baseDir}/${packedRoot}`;
+
+        // Extract into baseDir
+        await execAsync(`unzip -q "${zipPath}" -d "${CONFIG.baseDir}"`);
+
+        // Rename if the packed root name differs from the target dir name
+        if (packedRoot !== c.dir) {
+          if (existsSync(extractedDir)) {
+            await execAsync(`mv "${extractedDir}" "${targetDir}"`);
+          }
+        }
+
+        results.push(`✅ ${c.label} — extracted to ${targetDir}`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — extraction failed: ${err.message}`);
+      }
+    }
+
+    return { content: [{ type: "text", text: "Extract Results:\n" + results.join("\n") }] };
+  }
+);
+
+// ── Tool: setup_jdbc_driver ──────────────────────────────────────────────────
+server.tool(
+  "setup_jdbc_driver",
+  "Download the MySQL JDBC driver JAR from Maven Central and copy it to every component's repository/components/lib/ directory.",
+  {
+    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+      .describe("Copy driver to this component only, or 'all' for all components"),
+  },
+  async ({ component }) => {
+    const driverCfg = CONFIG.jdbcDriver || {
+      version: "8.0.29",
+      downloadUrl: "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.29/mysql-connector-java-8.0.29.jar",
+    };
+
+    const jarName = `mysql-connector-java-${driverCfg.version}.jar`;
+    const tmpPath = `/tmp/${jarName}`;
+
+    // Download if not already cached
+    if (!existsSync(tmpPath)) {
+      try {
+        await execAsync(`curl -fsSL -o "${tmpPath}" "${driverCfg.downloadUrl}"`);
+      } catch (err) {
+        return { content: [{ type: "text", text: `❌ Download failed: ${err.message}\nURL: ${driverCfg.downloadUrl}` }] };
+      }
+    }
+
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const libDir = componentPath(key, "repository/components/lib");
+      const destJar = `${libDir}/${jarName}`;
+
+      if (!existsSync(`${CONFIG.baseDir}/${c.dir}`)) {
+        results.push(`⚠️  ${c.label} — component directory not found (extract it first)`);
+        continue;
+      }
+
+      try {
+        await execAsync(`mkdir -p "${libDir}" && cp "${tmpPath}" "${destJar}"`);
+        results.push(`✅ ${c.label} — ${jarName} copied to ${libDir}`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — copy failed: ${err.message}`);
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `JDBC Driver Setup (${jarName}):\n` + results.join("\n"),
+      }],
+    };
+  }
 );
 
 // ─── Resources ───────────────────────────────────────────────────────────────
