@@ -75,12 +75,22 @@ Edit `config.json`:
 
 ```jsonc
 {
-  "baseDir": "/path/to/your/distributed_deployment",  // ← change this
+  "baseDir": "/path/to/your/distributed_deployment",      // ← change this
+  "zips": {
+    "tm":  "/path/to/wso2am-tm-4.6.0.17.zip",            // ← change this
+    "acp": "/path/to/wso2am-acp-4.6.0.18.zip",           // ← change this
+    "km":  "/path/to/wso2am-acp-4.6.0.18.zip",           // same as acp
+    "gw":  "/path/to/wso2am-universal-gw-4.6.0.zip"      // ← change this
+  },
+  "jdbcDriver": {
+    "version": "8.0.29",
+    "downloadUrl": "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.29/mysql-connector-java-8.0.29.jar"
+  },
   "mysql": {
     "host": "127.0.0.1",
     "port": 3306,
     "adminUser": "root",
-    "adminPassword": "your-mysql-root-password"       // ← change this
+    "adminPassword": "your-mysql-root-password"           // ← change this
   },
   ...
 }
@@ -123,17 +133,34 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ---
 
+## Quick Start (First-Time Setup)
+
+After cloning, configuring `config.json`, and registering the MCP server, run these prompts **in order**:
+
+```
+1. "Extract all WSO2 APIM components"
+2. "Download and install the MySQL JDBC driver"
+3. "Set up the APIM databases"
+4. "Start all APIM components"
+```
+
+The MCP server handles extraction, driver installation, database init, and sequenced startup automatically.
+
+---
+
 ## Available Tools
 
 | Tool | Description |
 |------|-------------|
+| `extract_components` | Extract component ZIPs into `baseDir` — KM auto-renamed from ACP zip |
+| `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
+| `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
 | `start_all` | Start all 4 components in correct order (TM → KM → ACP → GW), halts on first failure |
 | `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
 | `stop_all` | Stop all 4 components in correct order (GW → ACP → KM → TM) |
 | `check_status` | Live status of all 4 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
-| `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `get_deployment_info` | Full topology, ports, credentials, and known issue fixes |
 
 ## Available Resources
@@ -151,13 +178,16 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ## Example Prompts
 
 ```
+"Extract all WSO2 APIM components"
+"Extract only the Traffic Manager"
+"Download and install the MySQL JDBC driver"
+"Set up the APIM databases"
+"Start all APIM components"
 "Start the WSO2 Traffic Manager"
 "Start the Key Manager"
-"Start all APIM components"
 "Stop all APIM components"
 "Check status of all APIM components"
 "Show errors from the ACP logs"
-"Set up the MySQL databases for APIM"
 "What are the gateway API endpoints?"
 ```
 
@@ -476,6 +506,12 @@ MIT
 ---
 
 ## Changelog
+
+### v1.3.0 — Extract Components + JDBC Driver Setup
+- New `extract_components` tool: unzips TM/ACP/GW/KM into `baseDir` with automatic rename for KM
+- New `setup_jdbc_driver` tool: downloads MySQL connector from Maven Central and copies to all component lib dirs
+- `config.json` now supports `zips` (per-component zip paths) and `jdbcDriver` sections
+- Full zero-to-running setup via MCP prompts only
 
 ### v1.2.0 — Graceful Stop + start_all / stop_all
 - `stop_component` now calls the proper shutdown script (`gateway.sh stop` etc.) instead of `kill -9`
