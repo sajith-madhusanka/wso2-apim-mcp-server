@@ -139,23 +139,135 @@ server.tool(
 // ── Tool: stop_component ─────────────────────────────────────────────────────
 server.tool(
   "stop_component",
-  "Stop a WSO2 APIM 4.6.0 component (tm | acp | gw).",
+  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). Stop order: GW → ACP → KM → TM.",
   { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
-    const pidFile = componentPath(component, c.pidFile);
 
-    if (!existsSync(pidFile)) {
-      return { content: [{ type: "text", text: `⚠️  ${c.label} PID file not found — may not be running.` }] };
+    if (!isRunning(component)) {
+      return { content: [{ type: "text", text: `⚠️  ${c.label} is not running.` }] };
     }
 
-    const pid = readFileSync(pidFile, "utf8").trim();
+    const script = componentPath(component, c.script);
     try {
-      process.kill(Number(pid), 9);
-      return { content: [{ type: "text", text: `🛑 ${c.label} stopped (PID ${pid}).` }] };
-    } catch {
-      return { content: [{ type: "text", text: `⚠️  Could not kill PID ${pid} — process may already be stopped.` }] };
+      await execAsync(`"${script}" stop`);
+
+      // Poll every 2s (up to 30s) to confirm the process has exited
+      const stopped = await new Promise((resolve) => {
+        let attempts = 0;
+        const iv = setInterval(() => {
+          attempts++;
+          if (!isRunning(component)) { clearInterval(iv); resolve(true); }
+          else if (attempts >= 15) { clearInterval(iv); resolve(false); }
+        }, 2000);
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: stopped
+            ? `🛑 ${c.label} stopped successfully.`
+            : `⚠️  ${c.label} stop command issued but process may still be running. Check with check_status.`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Failed to stop ${c.label}:\n${err.message}` }] };
     }
+  }
+);
+
+// ── Tool: stop_all ───────────────────────────────────────────────────────────
+server.tool(
+  "stop_all",
+  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → KM → TM.",
+  {},
+  async () => {
+    const stopOrder = ["gw", "acp", "km", "tm"];
+    const results = [];
+
+    for (const component of stopOrder) {
+      const c = CONFIG.components[component];
+      if (!isRunning(component)) {
+        results.push(`⚪ ${c.label} — already stopped`);
+        continue;
+      }
+      try {
+        const script = componentPath(component, c.script);
+        await execAsync(`"${script}" stop`);
+        const stopped = await new Promise((resolve) => {
+          let attempts = 0;
+          const iv = setInterval(() => {
+            attempts++;
+            if (!isRunning(component)) { clearInterval(iv); resolve(true); }
+            else if (attempts >= 15) { clearInterval(iv); resolve(false); }
+          }, 2000);
+        });
+        results.push(stopped
+          ? `🛑 ${c.label} — stopped`
+          : `⚠️  ${c.label} — stop issued, may still be running`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — error: ${err.message}`);
+      }
+    }
+
+    return { content: [{ type: "text", text: "Stop All Results:\n" + results.join("\n") }] };
+  }
+);
+
+// ── Tool: start_all ──────────────────────────────────────────────────────────
+server.tool(
+  "start_all",
+  "Start all WSO2 APIM 4.6.0 components in the correct order: TM → KM → ACP → GW.",
+  {},
+  async () => {
+    const startOrder = ["tm", "km", "acp", "gw"];
+    const results = [];
+
+    for (const component of startOrder) {
+      const c = CONFIG.components[component];
+      if (isRunning(component)) {
+        results.push(`✅ ${c.label} — already running (port ${c.mgtPort})`);
+        continue;
+      }
+      try {
+        // Clear stale metadata
+        const metaBase = componentPath(component, "repository/resources/conf/.metadata");
+        await execAsync(`rm -f "${metaBase}/metadata_config.properties" "${metaBase}/metadata_template.properties"`);
+
+        const script = componentPath(component, c.script);
+        await execAsync(`"${script}" start`);
+
+        const logFile = componentPath(component, c.logFile);
+        const pollResult = await new Promise((resolve) => {
+          let attempts = 0;
+          const iv = setInterval(() => {
+            attempts++;
+            try {
+              const log = readFileSync(logFile, "utf8");
+              if (log.includes("Mgt Console URL")) {
+                clearInterval(iv);
+                resolve({ started: true, elapsed: attempts * 2 });
+              } else if (attempts >= 45) {
+                clearInterval(iv);
+                const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
+                resolve({ started: false, error: errLine || "Timed out after 90s" });
+              }
+            } catch { /* log not yet written */ }
+          }, 2000);
+        });
+
+        results.push(pollResult.started
+          ? `✅ ${c.label} — started in ~${pollResult.elapsed}s (port ${c.mgtPort})`
+          : `❌ ${c.label} — failed: ${pollResult.error}`);
+
+        if (!pollResult.started) break; // Don't start dependent components if one fails
+      } catch (err) {
+        results.push(`❌ ${c.label} — error: ${err.message}`);
+        break;
+      }
+    }
+
+    return { content: [{ type: "text", text: "Start All Results:\n" + results.join("\n") }] };
   }
 );
 
