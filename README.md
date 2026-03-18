@@ -204,11 +204,11 @@ The agent will:
 
 | Tool | Description |
 |------|-------------|
-| `configure` | Save environment settings (paths, credentials) to `config.json` — called by the agent, not the user. Auto-sets `zips.km = zips.acp`. |
+| `configure` | Save environment settings (paths, credentials, DB names) to `config.json` — called by the agent, not the user. Auto-sets `zips.km = zips.acp`. Supports `amDbName`/`sharedDbName` to rename databases. |
 | `apply_config` | Write `deployment.toml` for each component from current config.json values (DB host/port/name/user/password). Only `deployment.toml` is modified. Port offsets are FIXED. |
 | `extract_components` | Extract component ZIPs into `baseDir` — scans by prefix (e.g. `wso2am-tm-*.zip`) so U2-level suffix is ignored; KM auto-renamed from ACP zip |
 | `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
-| `setup_databases` | Create MySQL databases, users, and run init scripts |
+| `setup_databases` | Create MySQL databases, users, and run init scripts. If a database already exists, pauses and asks whether to use existing (`use_existing`), recreate (`force_reinit`), or stop to reconfigure (`reconfigure`) |
 | `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
 | `start_all` | Start all components in correct order (TM → KM → ACP → GW), halts on first failure |
 | `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
