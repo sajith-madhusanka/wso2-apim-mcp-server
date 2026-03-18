@@ -509,6 +509,143 @@ claude> Check status of all APIM components
 
 ---
 
+## Contributing
+
+Contributions are welcome — whether it's a new tool, a bug fix, or better docs.
+
+---
+
+### Project Structure
+
+```
+wso2-apim-mcp-server/
+├── server.js            # All MCP tools and resources (single-file server)
+├── config.json          # Your local config (git-ignored)
+├── config.example.json  # Committed template — update this when adding new config keys
+├── package.json
+└── README.md
+```
+
+> All tools and resources live in `server.js`. The file is structured in clearly labelled sections with comments like `// ── Tool: start_component`.
+
+---
+
+### Adding a New Tool
+
+1. **Define the tool** in `server.js` using `server.tool()`:
+
+```js
+server.tool(
+  "my_tool_name",                       // unique snake_case name
+  "What this tool does (shown to AI)",  // description — be precise
+  {
+    // Zod schema for input parameters
+    component: z.enum(["tm", "acp", "gw"]).describe("Which component"),
+    dryRun:    z.boolean().default(false).describe("Preview without executing"),
+  },
+  async ({ component, dryRun }) => {
+    // ... your logic ...
+    return {
+      content: [{ type: "text", text: "Result text here" }],
+    };
+  }
+);
+```
+
+2. **Validate syntax** before committing:
+```bash
+node --check server.js
+```
+
+3. **Update `config.example.json`** if your tool needs new config keys.
+
+4. **Update the Tools table** in this README.
+
+5. **Add an example prompt** to the Example Prompts section.
+
+---
+
+### Modifying an Existing Tool
+
+Each tool is a self-contained `server.tool(...)` block. Find the block by its comment header:
+
+```
+// ── Tool: start_component ──
+```
+
+Key conventions:
+- Return `{ content: [{ type: "text", text: "..." }] }` for all responses
+- Use emoji prefixes for status: `✅` success · `❌` error · `⚠️` warning · `⏭️` skipped · `🛑` stopped
+- Poll in **2-second intervals** (not fixed sleeps) for long-running operations
+- Always check `isRunning(key)` before starting/stopping
+- Clear stale `.metadata` files before starting a component
+
+---
+
+### Adding a New Resource
+
+Resources expose read-only data (config files, logs, etc.) to the AI context:
+
+```js
+server.resource(
+  "my-resource-id",          // internal ID (kebab-case)
+  "apim://my/uri",           // URI used in prompts
+  "Human-readable description",
+  async () => ({
+    contents: [{
+      uri: "apim://my/uri",
+      mimeType: "text/plain",  // or "application/json"
+      text: "... content ...",
+    }],
+  })
+);
+```
+
+---
+
+### Branch Strategy
+
+| Branch | Purpose | PR target |
+|--------|---------|-----------|
+| `main` | 4-node topology (with KM) — source of truth | Open PRs here |
+| `cp-tm-gw-km` | Stable 4-node snapshot | Synced from `main` |
+| `cp-tm-gw` | 3-node snapshot (no KM) | Synced from `main` with KM stripped |
+
+**Always open PRs against `main`.** The `cp-tm-gw-km` and `cp-tm-gw` branches are synced after each release.
+
+When modifying `server.js`, if the change applies to both topologies, document that in your PR description so the maintainer can sync appropriately.
+
+---
+
+### Testing Your Changes
+
+There is no automated test suite yet. To manually verify:
+
+1. **Check syntax:**
+   ```bash
+   node --check server.js
+   ```
+
+2. **Run the server locally** and call it via the MCP inspector:
+   ```bash
+   npx @modelcontextprotocol/inspector node server.js
+   ```
+   This opens a browser UI where you can invoke tools directly.
+
+3. **Test with your AI client** — restart the session and try the tool via a natural language prompt.
+
+---
+
+### Submitting a Pull Request
+
+1. Fork the repo and create a branch: `git checkout -b feat/my-new-tool`
+2. Make changes to `server.js` (and `config.example.json` / `README.md` as needed)
+3. Validate: `node --check server.js`
+4. Open a PR against `main` with a clear description of what the tool does and why
+
+---
+
+
 ## License
 
 MIT
