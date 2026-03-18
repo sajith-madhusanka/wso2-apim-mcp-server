@@ -176,6 +176,7 @@ The MCP server handles extraction, driver installation, database init, and seque
 | `stop_all` | Stop all 4 components in correct order (GW → ACP → KM → TM) |
 | `check_status` | Live status of all 4 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
+| `setup_update_tool` | Download the WSO2 U2 binary via the bundled `update_tool_setup.sh` — auto-detects OS/arch, saves path to `config.json` |
 | `check_update_level` | Show current U2 update level for each component (reads `updates/config.json`) |
 | `apply_updates` | Apply WSO2 U2 updates — optionally pin to a specific level with `level` parameter |
 | `revert_updates` | Revert the last U2 update applied to a component |
@@ -266,9 +267,34 @@ Or via MCP tool:
 
 WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as cumulative update levels. Each level is a superset of all previous levels.
 
-### Prerequisites
+### Setup (One-time)
 
-1. Download the WSO2 update tool for your OS from **https://updates.wso2.com**:
+The WSO2 update tool binary is bundled with each product pack — **no manual download needed**. Just run:
+
+```
+"Set up the WSO2 update tool"   → setup_update_tool
+```
+
+This runs the bundled `bin/update_tool_setup.sh` script, which contacts the WSO2 update API, downloads the correct binary for your OS and architecture, and automatically saves the path to `config.json` as `updates.toolPath`.
+
+Then add your WSO2 account credentials to `config.json`:
+
+```json
+"updates": {
+  "toolPath": "/auto/detected/by/setup_update_tool",
+  "credentials": {
+    "username": "your-wso2-email@example.com",
+    "password": "your-wso2-account-password"
+  }
+}
+```
+
+> 💡 `setup_update_tool` defaults to the `acp` component's bin dir. Pass `component: "tm"` (or any other) to use a different one.
+
+<details>
+<summary>Manual download (alternative)</summary>
+
+If you prefer to download manually from **https://updates.wso2.com**:
 
 | OS | Binary |
 |----|--------|
@@ -277,26 +303,20 @@ WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as c
 | Linux (64-bit) | `wso2update_linux` |
 | Windows | `wso2update_windows.exe` |
 
-2. Add to `config.json`:
-```json
-"updates": {
-  "toolPath": "/absolute/path/to/wso2update_darwin",
-  "credentials": {
-    "username": "your-wso2-email@example.com",
-    "password": "your-wso2-account-password"
-  }
-}
-```
+Set `updates.toolPath` in `config.json` to the absolute path of the binary.
+
+</details>
 
 ### Update Workflow
 
 ```
-1. "Check the current U2 update level"       → check_update_level
-2. "Stop all APIM components"                → stop_all
-3. "Apply updates to all components"         → apply_updates (latest)
+1. "Set up the WSO2 update tool"             → setup_update_tool (first time only)
+2. "Check the current U2 update level"       → check_update_level
+3. "Stop all APIM components"                → stop_all
+4. "Apply updates to all components"         → apply_updates (latest)
    — or —
    "Update all components to U2 level 20"   → apply_updates with level: 20
-4. "Start all APIM components"               → start_all
+5. "Start all APIM components"               → start_all
 ```
 
 ### Reverting an Update
@@ -310,6 +330,7 @@ WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as c
 ### Example Prompts
 
 ```
+"Set up the WSO2 update tool"
 "What U2 level are my APIM components on?"
 "Update all APIM components to the latest U2 level"
 "Update the Traffic Manager to U2 level 20"
@@ -720,6 +741,11 @@ MIT
 ---
 
 ## Changelog
+
+### v1.5.0 — Automated U2 Tool Setup
+- New `setup_update_tool` tool: runs bundled `bin/update_tool_setup.sh`, downloads the correct wso2update binary for the current OS/arch, and auto-saves path to `config.json`
+- No more manual binary download — full U2 workflow is now self-contained
+- README: WSO2 U2 Updates section rewritten with simplified setup, manual-download collapsible, and updated workflow
 
 ### v1.4.0 — WSO2 U2 Update Tools
 - New `check_update_level` tool: reads `updates/config.json` from each component — no binary needed
