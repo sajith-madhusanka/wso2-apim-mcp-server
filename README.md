@@ -36,9 +36,8 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
                 └───────────────────────┘
 ```
 
-**Start order:** TM → KM → ACP → GW  
+**Start order:** TM → ACP → GW  
 **Portal URLs (ACP):** `https://localhost:9443/publisher` | `/devportal` | `/admin`  
-**Key Manager Management URL:** `https://localhost:9446/carbon/`
 
 ---
 
@@ -46,12 +45,11 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
 
 - **Node.js 18+** (tested on v20)
 - **MySQL 8.x** running locally
-- WSO2 APIM 4.6.0 ZIPs extracted into your `baseDir`:
-  - `wso2am-tm-4.6.0` (from `wso2am-tm-4.6.0.17.zip`)
-  - `wso2am-km-4.6.0` (extracted from `wso2am-acp-4.6.0.18.zip` — KM uses the ACP binary with `bin/key-manager.sh`)
-  - `wso2am-acp-4.6.0` (from `wso2am-acp-4.6.0.18.zip`)
-  - `wso2am-universal-gw-4.6.0` (from `wso2am-universal-gw-4.6.0.zip`)
-- MySQL JDBC connector JAR (`mysql-connector-java-8.x.jar`) copied into each component's `repository/components/lib/`
+- WSO2 APIM 4.6.0 ZIP files (point `config.json → zips` at them; the `extract_components` tool handles extraction):
+  - `wso2am-tm-4.6.0.17.zip`
+  - `wso2am-acp-4.6.0.18.zip`
+  - `wso2am-universal-gw-4.6.0.zip`
+- MySQL JDBC driver — **downloaded automatically** by the `setup_jdbc_driver` tool (no manual copy needed)
 
 ---
 
@@ -144,6 +142,9 @@ After cloning, configuring `config.json`, and registering the MCP server, run th
 4. "Start all APIM components"
 ```
 
+> The `setup_jdbc_driver` tool downloads the MySQL connector automatically — no manual JAR download required.
+> The `setup_databases` tool creates databases with **`CHARACTER SET latin1`** as required by WSO2 APIM.
+
 The MCP server handles extraction, driver installation, database init, and sequenced startup automatically.
 
 ---
@@ -157,7 +158,7 @@ The MCP server handles extraction, driver installation, database init, and seque
 | `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `start_component` | Start one component: `tm`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
 | `start_all` | Start all 3 components in correct order (TM → ACP → GW), halts on first failure |
-| `stop_component` | Gracefully stop one component (`tm`, `acp`, or `gw`) using its shutdown script |
+| `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
 | `stop_all` | Stop all 3 components in correct order (GW → ACP → TM) |
 | `check_status` | Live status of all 3 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
@@ -193,55 +194,6 @@ The MCP server handles extraction, driver installation, database init, and seque
 
 ---
 
-## Key Manager Node
-
-The Key Manager is a **dedicated token-validation and key-management plane** that offloads OAuth2/JWT operations from the API Control Plane.
-
-### How it works
-
-| Concern | Details |
-|---------|---------|
-| **Binary** | Uses the ACP zip (`wso2am-acp-4.6.0.18.zip`) — the script `bin/key-manager.sh` activates the KM profile |
-| **Port** | HTTPS **9446** (offset 3), HTTP 9766 |
-| **Databases** | `APIM_46_AM_DB` + `APIM_46_SHARED_DB` (same MySQL users as ACP) |
-| **Event hub** | Subscribes to ACP JMS at `tcp://localhost:5672` for key management events |
-| **Token validation** | Gateway calls `https://localhost:9446/services/` for every inbound API request |
-
-### Node connectivity
-
-```
-GW  ──(token validation)──▶  KM :9446
-ACP ──(key manager config)──▶ KM :9446
-KM  ──(event hub subscribe)──▶ ACP JMS :5672
-```
-
-### `deployment.toml` highlights
-
-```toml
-[server]
-hostname = "localhost"
-server_role = "key-manager"
-offset = 3
-
-[apim.event_hub]
-enable = true
-service_url = "https://localhost:9443/services/"
-event_listening_endpoints = ["tcp://localhost:5672"]
-```
-
-### Starting the Key Manager
-
-```bash
-./distributed_deployment/wso2am-km-4.6.0/bin/key-manager.sh start
-```
-
-Or via MCP tool:
-
-```
-"Start the Key Manager"
-```
-
----
 
 ## Known Issues & Fixes
 
@@ -255,6 +207,8 @@ Or via MCP tool:
 ---
 
 ## Database Configuration
+
+Both databases are created with **`CHARACTER SET latin1`** (required by WSO2 APIM — do not use `utf8mb4`).
 
 | Database | User | Purpose |
 |----------|------|---------|
@@ -508,7 +462,7 @@ MIT
 ## Changelog
 
 ### v1.3.0 — Extract Components + JDBC Driver Setup
-- New `extract_components` tool: unzips TM/ACP/GW into `baseDir`
+- New `extract_components` tool: unzips TM/ACP/GW/KM into `baseDir` with automatic rename for KM
 - New `setup_jdbc_driver` tool: downloads MySQL connector from Maven Central and copies to all component lib dirs
 - `config.json` now supports `zips` (per-component zip paths) and `jdbcDriver` sections
 - Full zero-to-running setup via MCP prompts only
