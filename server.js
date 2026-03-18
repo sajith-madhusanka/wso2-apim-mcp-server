@@ -488,6 +488,72 @@ FLUSH PRIVILEGES;
   }
 );
 
+// ── Tool: configure ──────────────────────────────────────────────────────────
+server.tool(
+  "configure",
+  "Set or update configuration values in config.json. " +
+  "The AI agent calls this to store environment details (paths, credentials) — users do not need to edit config.json manually. " +
+  "Only the fields you provide are updated; everything else is preserved.",
+  {
+    baseDir:            z.string().optional().describe("Absolute path where APIM component directories live"),
+    mysqlHost:          z.string().optional().describe("MySQL host (default: 127.0.0.1)"),
+    mysqlPort:          z.number().int().optional().describe("MySQL port (default: 3306)"),
+    mysqlAdminUser:     z.string().optional().describe("MySQL admin username (e.g. root)"),
+    mysqlAdminPassword: z.string().optional().describe("MySQL admin password"),
+    updatesUsername:    z.string().optional().describe("WSO2 account email for U2 updates"),
+    updatesPassword:    z.string().optional().describe("WSO2 account password for U2 updates"),
+    zipTm:              z.string().optional().describe("Absolute path to the TM zip file"),
+    zipAcp:             z.string().optional().describe("Absolute path to the ACP zip file"),
+    zipGw:              z.string().optional().describe("Absolute path to the GW zip file"),
+    zipKm:              z.string().optional().describe("Absolute path to the KM zip file (usually same as ACP)"),
+  },
+  async (params) => {
+    let rawCfg = {};
+    try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* start fresh */ }
+
+    const set = (obj, path, val) => {
+      const keys = path.split(".");
+      let cur = obj;
+      for (let i = 0; i < keys.length - 1; i++) {
+        if (!cur[keys[i]] || typeof cur[keys[i]] !== "object") cur[keys[i]] = {};
+        cur = cur[keys[i]];
+      }
+      cur[keys[keys.length - 1]] = val;
+    };
+
+    const changed = [];
+
+    if (params.baseDir            !== undefined) { set(rawCfg, "baseDir", params.baseDir); changed.push(`baseDir = "${params.baseDir}"`); }
+    if (params.mysqlHost          !== undefined) { set(rawCfg, "mysql.host", params.mysqlHost); changed.push(`mysql.host = "${params.mysqlHost}"`); }
+    if (params.mysqlPort          !== undefined) { set(rawCfg, "mysql.port", params.mysqlPort); changed.push(`mysql.port = ${params.mysqlPort}`); }
+    if (params.mysqlAdminUser     !== undefined) { set(rawCfg, "mysql.adminUser", params.mysqlAdminUser); changed.push(`mysql.adminUser = "${params.mysqlAdminUser}"`); }
+    if (params.mysqlAdminPassword !== undefined) { set(rawCfg, "mysql.adminPassword", params.mysqlAdminPassword); changed.push(`mysql.adminPassword = ****`); }
+    if (params.updatesUsername    !== undefined) { set(rawCfg, "updates.credentials.username", params.updatesUsername); changed.push(`updates.credentials.username = "${params.updatesUsername}"`); }
+    if (params.updatesPassword    !== undefined) { set(rawCfg, "updates.credentials.password", params.updatesPassword); changed.push(`updates.credentials.password = ****`); }
+    if (params.zipTm              !== undefined) { set(rawCfg, "zips.tm", params.zipTm); changed.push(`zips.tm = "${params.zipTm}"`); }
+    if (params.zipAcp             !== undefined) { set(rawCfg, "zips.acp", params.zipAcp); changed.push(`zips.acp = "${params.zipAcp}"`); }
+    if (params.zipGw              !== undefined) { set(rawCfg, "zips.gw", params.zipGw); changed.push(`zips.gw = "${params.zipGw}"`); }
+    if (params.zipKm              !== undefined) { set(rawCfg, "zips.km", params.zipKm); changed.push(`zips.km = "${params.zipKm}"`); }
+
+    if (changed.length === 0) {
+      return { content: [{ type: "text", text: "⚠️  No fields provided — nothing updated." }] };
+    }
+
+    writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
+
+    // Apply to live CONFIG so the session picks up changes immediately
+    Object.assign(CONFIG, JSON.parse(readFileSync(configPath, "utf8")));
+
+    return {
+      content: [{
+        type: "text",
+        text: `✅ config.json updated (${changed.length} field${changed.length > 1 ? "s" : ""}):\n` +
+              changed.map(c => `   • ${c}`).join("\n"),
+      }],
+    };
+  }
+);
+
 // ── Tool: get_deployment_info ────────────────────────────────────────────────
 server.tool(
   "get_deployment_info",
