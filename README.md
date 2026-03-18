@@ -119,8 +119,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 | Tool | Description |
 |------|-------------|
-| `start_component` | Start `tm`, `acp`, or `gw` (clears stale metadata automatically) |
-| `stop_component` | Stop a component by PID |
+| `start_component` | Start one component: `tm`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
+| `start_all` | Start all 3 components in correct order (TM → ACP → GW), halts on first failure |
+| `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
+| `stop_all` | Stop all 3 components in correct order (GW → ACP → TM) |
 | `check_status` | Live status of all 3 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
 | `setup_databases` | Create MySQL databases, users, and run init scripts |
@@ -141,6 +143,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 ```
 "Start the WSO2 Traffic Manager"
+"Start all APIM components"
+"Stop all APIM components"
 "Check status of all APIM components"
 "Show errors from the ACP logs"
 "Set up the MySQL databases for APIM"
@@ -407,3 +411,17 @@ claude> Check status of all APIM components
 ## License
 
 MIT
+
+## Changelog
+
+### v1.2.0 — Graceful Stop + start_all / stop_all
+- `stop_component` now calls the proper shutdown script instead of `kill -9`
+- Polls every 2s (up to 30s) to confirm the process has exited
+- New `stop_all` tool: stops GW → ACP → TM in one command
+- New `start_all` tool: starts TM → ACP → GW, halts on first failure
+
+### v1.0.0 — Initial Release
+- 3-node topology: TM, ACP, GW
+- MySQL database setup (`setup_databases` tool)
+- `start_component`, `stop_component`, `check_status`, `view_logs`, `get_deployment_info`
+- Multi-agent integration guides (Copilot CLI, Claude CLI, Claude Desktop, VS Code, Cursor, Windsurf, Zed, Continue.dev)

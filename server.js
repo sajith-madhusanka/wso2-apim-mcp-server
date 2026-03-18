@@ -75,7 +75,7 @@ const server = new McpServer({
 // ── Tool: start_component ────────────────────────────────────────────────────
 server.tool(
   "start_component",
-  "Start a WSO2 APIM 4.6.0 component (tm | acp | gw). Start order: tm → acp → gw.",
+  "Start a WSO2 APIM 4.6.0 component. Start order: tm → acp → gw.",
   { component: z.enum(["tm", "acp", "gw"]).describe("Component to start: tm, acp, or gw") },
   async ({ component }) => {
     const c = CONFIG.components[component];
@@ -90,45 +90,191 @@ server.tool(
     const script = componentPath(component, c.script);
     await execAsync(`"${script}" start`);
 
-    return {
-      content: [{
-        type: "text",
-        text: `🚀 ${c.label} start command issued.\n` +
-              `Management port: ${c.mgtPort}\n` +
-              `Log: ${componentPath(component, c.logFile)}\n` +
-              `Tip: use check_status or view_logs to monitor startup.`,
-      }],
-    };
+    // Rapid-poll the log every 2s (up to 90s) for startup signal
+    const logFile = componentPath(component, c.logFile);
+    const pollResult = await new Promise((resolve) => {
+      let attempts = 0;
+      const maxAttempts = 45;
+      const interval = setInterval(() => {
+        attempts++;
+        try {
+          const log = readFileSync(logFile, "utf8");
+          if (log.includes("Mgt Console URL")) {
+            clearInterval(interval);
+            const match = log.match(/Mgt Console URL\s*:\s*(\S+)/);
+            resolve({ started: true, url: match ? match[1] : `https://localhost:${c.mgtPort}/carbon/`, elapsed: attempts * 2 });
+          } else {
+            const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
+            if (attempts >= maxAttempts) {
+              clearInterval(interval);
+              resolve({ started: false, error: errLine || "Timed out after 90s", elapsed: attempts * 2 });
+            }
+          }
+        } catch { /* log not yet written */ }
+      }, 2000);
+    });
+
+    if (pollResult.started) {
+      return {
+        content: [{
+          type: "text",
+          text: `✅ ${c.label} started in ~${pollResult.elapsed}s\n` +
+                `Management URL: ${pollResult.url}\n` +
+                `Credentials: admin / admin`,
+        }],
+      };
+    } else {
+      return {
+        content: [{
+          type: "text",
+          text: `⚠️ ${c.label} did not confirm startup within 90s.\n` +
+                `Last error: ${pollResult.error}\n` +
+                `Check logs: ${logFile}`,
+        }],
+      };
+    }
   }
 );
 
 // ── Tool: stop_component ─────────────────────────────────────────────────────
 server.tool(
   "stop_component",
-  "Stop a WSO2 APIM 4.6.0 component (tm | acp | gw).",
+  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | acp | gw). Stop order: GW → ACP → TM.",
   { component: z.enum(["tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
-    const pidFile = componentPath(component, c.pidFile);
 
-    if (!existsSync(pidFile)) {
-      return { content: [{ type: "text", text: `⚠️  ${c.label} PID file not found — may not be running.` }] };
+    if (!isRunning(component)) {
+      return { content: [{ type: "text", text: `⚠️  ${c.label} is not running.` }] };
     }
 
-    const pid = readFileSync(pidFile, "utf8").trim();
+    const script = componentPath(component, c.script);
     try {
-      process.kill(Number(pid), 9);
-      return { content: [{ type: "text", text: `🛑 ${c.label} stopped (PID ${pid}).` }] };
-    } catch {
-      return { content: [{ type: "text", text: `⚠️  Could not kill PID ${pid} — process may already be stopped.` }] };
+      await execAsync(`"${script}" stop`);
+
+      // Poll every 2s (up to 30s) to confirm the process has exited
+      const stopped = await new Promise((resolve) => {
+        let attempts = 0;
+        const iv = setInterval(() => {
+          attempts++;
+          if (!isRunning(component)) { clearInterval(iv); resolve(true); }
+          else if (attempts >= 15) { clearInterval(iv); resolve(false); }
+        }, 2000);
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: stopped
+            ? `🛑 ${c.label} stopped successfully.`
+            : `⚠️  ${c.label} stop command issued but process may still be running. Check with check_status.`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Failed to stop ${c.label}:\n${err.message}` }] };
     }
+  }
+);
+
+// ── Tool: stop_all ───────────────────────────────────────────────────────────
+server.tool(
+  "stop_all",
+  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → TM.",
+  {},
+  async () => {
+    const stopOrder = ["gw", "acp", "tm"];
+    const results = [];
+
+    for (const component of stopOrder) {
+      const c = CONFIG.components[component];
+      if (!isRunning(component)) {
+        results.push(`⚪ ${c.label} — already stopped`);
+        continue;
+      }
+      try {
+        const script = componentPath(component, c.script);
+        await execAsync(`"${script}" stop`);
+        const stopped = await new Promise((resolve) => {
+          let attempts = 0;
+          const iv = setInterval(() => {
+            attempts++;
+            if (!isRunning(component)) { clearInterval(iv); resolve(true); }
+            else if (attempts >= 15) { clearInterval(iv); resolve(false); }
+          }, 2000);
+        });
+        results.push(stopped
+          ? `🛑 ${c.label} — stopped`
+          : `⚠️  ${c.label} — stop issued, may still be running`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — error: ${err.message}`);
+      }
+    }
+
+    return { content: [{ type: "text", text: "Stop All Results:\n" + results.join("\n") }] };
+  }
+);
+
+// ── Tool: start_all ──────────────────────────────────────────────────────────
+server.tool(
+  "start_all",
+  "Start all WSO2 APIM 4.6.0 components in the correct order: TM → ACP → GW.",
+  {},
+  async () => {
+    const startOrder = ["tm", "acp", "gw"];
+    const results = [];
+
+    for (const component of startOrder) {
+      const c = CONFIG.components[component];
+      if (isRunning(component)) {
+        results.push(`✅ ${c.label} — already running (port ${c.mgtPort})`);
+        continue;
+      }
+      try {
+        // Clear stale metadata
+        const metaBase = componentPath(component, "repository/resources/conf/.metadata");
+        await execAsync(`rm -f "${metaBase}/metadata_config.properties" "${metaBase}/metadata_template.properties"`);
+
+        const script = componentPath(component, c.script);
+        await execAsync(`"${script}" start`);
+
+        const logFile = componentPath(component, c.logFile);
+        const pollResult = await new Promise((resolve) => {
+          let attempts = 0;
+          const iv = setInterval(() => {
+            attempts++;
+            try {
+              const log = readFileSync(logFile, "utf8");
+              if (log.includes("Mgt Console URL")) {
+                clearInterval(iv);
+                resolve({ started: true, elapsed: attempts * 2 });
+              } else if (attempts >= 45) {
+                clearInterval(iv);
+                const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
+                resolve({ started: false, error: errLine || "Timed out after 90s" });
+              }
+            } catch { /* log not yet written */ }
+          }, 2000);
+        });
+
+        results.push(pollResult.started
+          ? `✅ ${c.label} — started in ~${pollResult.elapsed}s (port ${c.mgtPort})`
+          : `❌ ${c.label} — failed: ${pollResult.error}`);
+
+        if (!pollResult.started) break; // Don't start dependent components if one fails
+      } catch (err) {
+        results.push(`❌ ${c.label} — error: ${err.message}`);
+        break;
+      }
+    }
+
+    return { content: [{ type: "text", text: "Start All Results:\n" + results.join("\n") }] };
   }
 );
 
 // ── Tool: check_status ───────────────────────────────────────────────────────
 server.tool(
   "check_status",
-  "Check running status of all WSO2 APIM 4.6.0 components.",
+  "Check running status of all WSO2 APIM 4.6.0 components (tm, acp, gw).",
   {},
   async () => {
     const rows = Object.entries(CONFIG.components).map(([key, c]) => {
@@ -267,7 +413,6 @@ ${"═".repeat(55)}
    Publisher  https://localhost:9443/publisher
    DevPortal  https://localhost:9443/devportal
    Admin      https://localhost:9443/admin
-   Carbon     https://localhost:9443/carbon
    Credentials: admin / admin
 
 🔗 Gateway API Endpoints:
