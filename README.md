@@ -1,7 +1,13 @@
 # WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
 
-> **Branch:** `cp-tm-gw` — **3-node topology** (Control Plane + Traffic Manager + Gateway)
-> For the 4-node setup with a separate Key Manager, see branch [`cp-tm-gw-km`](../../tree/cp-tm-gw-km).
+## Choose Your Topology
+
+| Branch | Nodes | Description |
+|--------|-------|-------------|
+| [`cp-tm-gw`](../../tree/cp-tm-gw) | 3 | Control Plane + Traffic Manager + Gateway |
+| [`cp-tm-gw-km`](../../tree/cp-tm-gw-km) | 4 | + separate Key Manager node (recommended for production) |
+
+> `main` tracks the latest changes. Pick the branch that matches your deployment.
 
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** (Traffic Manager, Key Manager, API Control Plane, Universal Gateway) with MySQL.
@@ -36,8 +42,9 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
                 └───────────────────────┘
 ```
 
-**Start order:** TM → ACP → GW  
+**Start order:** TM → KM → ACP → GW  
 **Portal URLs (ACP):** `https://localhost:9443/publisher` | `/devportal` | `/admin`  
+**Key Manager Management URL:** `https://localhost:9446/carbon/`
 
 ---
 
@@ -47,7 +54,7 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
 - **MySQL 8.x** running locally
 - WSO2 APIM 4.6.0 ZIP files (point `config.json → zips` at them; the `extract_components` tool handles extraction):
   - `wso2am-tm-4.6.0.17.zip`
-  - `wso2am-acp-4.6.0.18.zip`
+  - `wso2am-acp-4.6.0.18.zip` (used for both ACP and KM nodes)
   - `wso2am-universal-gw-4.6.0.zip`
 - MySQL JDBC driver — **downloaded automatically** by the `setup_jdbc_driver` tool (no manual copy needed)
 
@@ -163,12 +170,13 @@ The MCP server handles extraction, driver installation, database init, and seque
 | `extract_components` | Extract component ZIPs into `baseDir` — KM auto-renamed from ACP zip |
 | `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
 | `setup_databases` | Create MySQL databases, users, and run init scripts |
-| `start_component` | Start one component: `tm`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
-| `start_all` | Start all 3 components in correct order (TM → ACP → GW), halts on first failure |
+| `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
+| `start_all` | Start all 4 components in correct order (TM → KM → ACP → GW), halts on first failure |
 | `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
-| `stop_all` | Stop all 3 components in correct order (GW → ACP → TM) |
-| `check_status` | Live status of all 3 components + portal URLs |
+| `stop_all` | Stop all 4 components in correct order (GW → ACP → KM → TM) |
+| `check_status` | Live status of all 4 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
+| `setup_update_tool` | Download the WSO2 U2 binary via the bundled `update_tool_setup.sh` — auto-detects OS/arch, saves path to `config.json` |
 | `check_update_level` | Show current U2 update level for each component (reads `updates/config.json`) |
 | `apply_updates` | Apply WSO2 U2 updates — optionally pin to a specific level with `level` parameter |
 | `revert_updates` | Revert the last U2 update applied to a component |
@@ -205,14 +213,88 @@ The MCP server handles extraction, driver installation, database init, and seque
 
 ---
 
+## Key Manager Node
+
+The Key Manager is a **dedicated token-validation and key-management plane** that offloads OAuth2/JWT operations from the API Control Plane.
+
+### How it works
+
+| Concern | Details |
+|---------|---------|
+| **Binary** | Uses the ACP zip (`wso2am-acp-4.6.0.18.zip`) — the script `bin/key-manager.sh` activates the KM profile |
+| **Port** | HTTPS **9446** (offset 3), HTTP 9766 |
+| **Databases** | `APIM_46_AM_DB` + `APIM_46_SHARED_DB` (same MySQL users as ACP) |
+| **Event hub** | Subscribes to ACP JMS at `tcp://localhost:5672` for key management events |
+| **Token validation** | Gateway calls `https://localhost:9446/services/` for every inbound API request |
+
+### Node connectivity
+
+```
+GW  ──(token validation)──▶  KM :9446
+ACP ──(key manager config)──▶ KM :9446
+KM  ──(event hub subscribe)──▶ ACP JMS :5672
+```
+
+### `deployment.toml` highlights
+
+```toml
+[server]
+hostname = "localhost"
+server_role = "key-manager"
+offset = 3
+
+[apim.event_hub]
+enable = true
+service_url = "https://localhost:9443/services/"
+event_listening_endpoints = ["tcp://localhost:5672"]
+```
+
+### Starting the Key Manager
+
+```bash
+./distributed_deployment/wso2am-km-4.6.0/bin/key-manager.sh start
+```
+
+Or via MCP tool:
+
+```
+"Start the Key Manager"
+```
+
+---
 
 ## WSO2 U2 Updates
 
 WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as cumulative update levels. Each level is a superset of all previous levels.
 
-### Prerequisites
+### Setup (One-time)
 
-1. Download the WSO2 update tool for your OS from **https://updates.wso2.com**:
+The WSO2 update tool binary is bundled with each product pack — **no manual download needed**. Just run:
+
+```
+"Set up the WSO2 update tool"   → setup_update_tool
+```
+
+This runs the bundled `bin/update_tool_setup.sh` script, which contacts the WSO2 update API, downloads the correct binary for your OS and architecture, and automatically saves the path to `config.json` as `updates.toolPath`.
+
+Then add your WSO2 account credentials to `config.json`:
+
+```json
+"updates": {
+  "toolPath": "/auto/detected/by/setup_update_tool",
+  "credentials": {
+    "username": "your-wso2-email@example.com",
+    "password": "your-wso2-account-password"
+  }
+}
+```
+
+> 💡 `setup_update_tool` defaults to the `acp` component's bin dir. Pass `component: "tm"` (or any other) to use a different one.
+
+<details>
+<summary>Manual download (alternative)</summary>
+
+If you prefer to download manually from **https://updates.wso2.com**:
 
 | OS | Binary |
 |----|--------|
@@ -221,26 +303,20 @@ WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as c
 | Linux (64-bit) | `wso2update_linux` |
 | Windows | `wso2update_windows.exe` |
 
-2. Add to `config.json`:
-```json
-"updates": {
-  "toolPath": "/absolute/path/to/wso2update_darwin",
-  "credentials": {
-    "username": "your-wso2-email@example.com",
-    "password": "your-wso2-account-password"
-  }
-}
-```
+Set `updates.toolPath` in `config.json` to the absolute path of the binary.
+
+</details>
 
 ### Update Workflow
 
 ```
-1. "Check the current U2 update level"       → check_update_level
-2. "Stop all APIM components"                → stop_all
-3. "Apply updates to all components"         → apply_updates (latest)
+1. "Set up the WSO2 update tool"             → setup_update_tool (first time only)
+2. "Check the current U2 update level"       → check_update_level
+3. "Stop all APIM components"                → stop_all
+4. "Apply updates to all components"         → apply_updates (latest)
    — or —
    "Update all components to U2 level 20"   → apply_updates with level: 20
-4. "Start all APIM components"               → start_all
+5. "Start all APIM components"               → start_all
 ```
 
 ### Reverting an Update
@@ -254,6 +330,7 @@ WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as c
 ### Example Prompts
 
 ```
+"Set up the WSO2 update tool"
 "What U2 level are my APIM components on?"
 "Update all APIM components to the latest U2 level"
 "Update the Traffic Manager to U2 level 20"
@@ -664,6 +741,11 @@ MIT
 ---
 
 ## Changelog
+
+### v1.5.0 — Automated U2 Tool Setup
+- New `setup_update_tool` tool: runs bundled `bin/update_tool_setup.sh`, downloads the correct wso2update binary for the current OS/arch, and auto-saves path to `config.json`
+- No more manual binary download — full U2 workflow is now self-contained
+- README: WSO2 U2 Updates section rewritten with simplified setup, manual-download collapsible, and updated workflow
 
 ### v1.4.0 — WSO2 U2 Update Tools
 - New `check_update_level` tool: reads `updates/config.json` from each component — no binary needed
