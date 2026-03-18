@@ -74,6 +74,13 @@ Edit `config.json`:
 ```jsonc
 {
   "baseDir": "/path/to/your/distributed_deployment",      // ← change this
+  "updates": {
+    "toolPath": "/path/to/wso2update_darwin",               // ← path to WSO2 update tool binary
+    "credentials": {
+      "username": "your-wso2-email@example.com",            // ← WSO2 account email
+      "password": "your-wso2-account-password"              // ← WSO2 account password
+    }
+  },
   "zips": {
     "tm":  "/path/to/wso2am-tm-4.6.0.17.zip",            // ← change this
     "acp": "/path/to/wso2am-acp-4.6.0.18.zip",           // ← change this
@@ -162,6 +169,9 @@ The MCP server handles extraction, driver installation, database init, and seque
 | `stop_all` | Stop all 3 components in correct order (GW → ACP → TM) |
 | `check_status` | Live status of all 3 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
+| `check_update_level` | Show current U2 update level for each component (reads `updates/config.json`) |
+| `apply_updates` | Apply WSO2 U2 updates — optionally pin to a specific level with `level` parameter |
+| `revert_updates` | Revert the last U2 update applied to a component |
 | `get_deployment_info` | Full topology, ports, credentials, and known issue fixes |
 
 ## Available Resources
@@ -180,20 +190,77 @@ The MCP server handles extraction, driver installation, database init, and seque
 
 ```
 "Extract all WSO2 APIM components"
-"Extract only the Traffic Manager"
 "Download and install the MySQL JDBC driver"
 "Set up the APIM databases"
 "Start all APIM components"
-"Start the WSO2 Traffic Manager"
-"Start the Key Manager"
 "Stop all APIM components"
 "Check status of all APIM components"
+"What U2 level are my APIM components on?"
+"Update all APIM components to the latest U2 level"
+"Update the Traffic Manager to U2 level 20"
+"Revert the last update on the Gateway"
 "Show errors from the ACP logs"
 "What are the gateway API endpoints?"
 ```
 
 ---
 
+
+## WSO2 U2 Updates
+
+WSO2 U2 (Update 2.0) delivers bug fixes, security patches, and improvements as cumulative update levels. Each level is a superset of all previous levels.
+
+### Prerequisites
+
+1. Download the WSO2 update tool for your OS from **https://updates.wso2.com**:
+
+| OS | Binary |
+|----|--------|
+| macOS (Intel) | `wso2update_darwin` |
+| macOS (Apple Silicon) | `wso2update_darwin_arm64` |
+| Linux (64-bit) | `wso2update_linux` |
+| Windows | `wso2update_windows.exe` |
+
+2. Add to `config.json`:
+```json
+"updates": {
+  "toolPath": "/absolute/path/to/wso2update_darwin",
+  "credentials": {
+    "username": "your-wso2-email@example.com",
+    "password": "your-wso2-account-password"
+  }
+}
+```
+
+### Update Workflow
+
+```
+1. "Check the current U2 update level"       → check_update_level
+2. "Stop all APIM components"                → stop_all
+3. "Apply updates to all components"         → apply_updates (latest)
+   — or —
+   "Update all components to U2 level 20"   → apply_updates with level: 20
+4. "Start all APIM components"               → start_all
+```
+
+### Reverting an Update
+
+```
+"Revert the last update on the ACP"         → revert_updates (component: acp)
+```
+
+> ⚠️ Always stop the component before updating or reverting. Use `stopFirst: true` (default) with `apply_updates` to auto-stop.
+
+### Example Prompts
+
+```
+"What U2 level are my APIM components on?"
+"Update all APIM components to the latest U2 level"
+"Update the Traffic Manager to U2 level 20"
+"Revert the last update on the Gateway"
+```
+
+---
 
 ## Known Issues & Fixes
 
@@ -557,8 +624,6 @@ server.resource(
 
 **Always open PRs against `main`.** The `cp-tm-gw-km` and `cp-tm-gw` branches are synced after each release.
 
-> Note: This is the `cp-tm-gw` (3-node) branch. Changes to KM-specific tools are not applicable here.
-
 When modifying `server.js`, if the change applies to both topologies, document that in your PR description so the maintainer can sync appropriately.
 
 ---
@@ -599,6 +664,13 @@ MIT
 ---
 
 ## Changelog
+
+### v1.4.0 — WSO2 U2 Update Tools
+- New `check_update_level` tool: reads `updates/config.json` from each component — no binary needed
+- New `apply_updates` tool: runs wso2update binary with optional `--level` flag to pin to a specific U2 level; auto-stops component before updating
+- New `revert_updates` tool: reverts last applied update
+- `config.json` gains `updates.toolPath` and `updates.credentials` section
+- README: new WSO2 U2 Updates section with workflow, OS binary table, and example prompts
 
 ### v1.3.0 — Extract Components + JDBC Driver Setup
 - New `extract_components` tool: unzips TM/ACP/GW/KM into `baseDir` with automatic rename for KM

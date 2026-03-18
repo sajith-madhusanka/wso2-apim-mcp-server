@@ -564,7 +564,212 @@ server.tool(
   }
 );
 
-// ─── Resources ───────────────────────────────────────────────────────────────
+// ── Tool: check_update_level ─────────────────────────────────────────────────
+server.tool(
+  "check_update_level",
+  "Show the current WSO2 U2 update level for each component by reading their updates/config.json. No update tool binary required.",
+  {
+    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+      .describe("Component to check, or 'all' for all components"),
+  },
+  async ({ component }) => {
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const rows = [];
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const cfgPath = componentPath(key, "updates/config.json");
+      if (!existsSync(cfgPath)) {
+        rows.push(`⚠️  ${c.label.padEnd(22)} — updates/config.json not found`);
+        continue;
+      }
+      try {
+        const u = JSON.parse(readFileSync(cfgPath, "utf8"));
+        const level   = u["update-level"] ?? "unknown";
+        const channel = u["channel"]       ?? "unknown";
+        const product = u["product"]?.pattern ?? c.dir;
+        rows.push(`✅ ${c.label.padEnd(22)} level: ${String(level).padEnd(6)}  channel: ${channel}  (${product})`);
+      } catch {
+        rows.push(`❌ ${c.label.padEnd(22)} — failed to parse updates/config.json`);
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: "WSO2 U2 Update Levels\n" + "─".repeat(60) + "\n" + rows.join("\n"),
+      }],
+    };
+  }
+);
+
+// ── Tool: apply_updates ───────────────────────────────────────────────────────
+server.tool(
+  "apply_updates",
+  "Apply WSO2 U2 updates to one or all components using the wso2update tool. Credentials and tool path must be set in config.json under 'updates'. The component must be stopped before updating.",
+  {
+    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+      .describe("Component to update, or 'all' for all components"),
+    level: z.number().int().positive().optional()
+      .describe("Target U2 level (e.g. 20). Omit to update to the latest available level."),
+    stopFirst: z.boolean().default(true)
+      .describe("Stop the component before applying updates (recommended, default: true)"),
+  },
+  async ({ component, level, stopFirst }) => {
+    const updCfg = CONFIG.updates;
+    if (!updCfg?.toolPath) {
+      return {
+        content: [{
+          type: "text",
+          text: "❌ 'updates.toolPath' not set in config.json.\n" +
+                "Download the WSO2 update tool from https://updates.wso2.com and set:\n" +
+                '  "updates": { "toolPath": "/path/to/wso2update_darwin", "credentials": { "username": "...", "password": "..." } }',
+        }],
+      };
+    }
+    if (!existsSync(updCfg.toolPath)) {
+      return { content: [{ type: "text", text: `❌ Update tool not found at: ${updCfg.toolPath}` }] };
+    }
+
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const productDir = `${CONFIG.baseDir}/${c.dir}`;
+
+      if (!existsSync(productDir)) {
+        results.push(`⚠️  ${c.label} — directory not found, skipping`);
+        continue;
+      }
+
+      // Read current level before update
+      let levelBefore = "unknown";
+      try {
+        const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+        levelBefore = u["update-level"] ?? "unknown";
+      } catch { /* ignore */ }
+
+      // Stop component first if requested
+      if (stopFirst && isRunning(key)) {
+        try {
+          results.push(`⏸  ${c.label} — stopping before update...`);
+          const script = componentPath(key, c.script);
+          await execAsync(`"${script}" stop`);
+          await new Promise((resolve) => {
+            let n = 0;
+            const iv = setInterval(() => {
+              n++;
+              if (!isRunning(key) || n >= 15) { clearInterval(iv); resolve(); }
+            }, 2000);
+          });
+        } catch (e) {
+          results.push(`⚠️  ${c.label} — could not stop cleanly: ${e.message}`);
+        }
+      } else if (isRunning(key)) {
+        results.push(`⚠️  ${c.label} — is still running; stop it first or use stopFirst:true`);
+        continue;
+      }
+
+      // Build update command
+      const levelFlag = level !== undefined ? ` --level ${level}` : "";
+      const cmd = `cd "${productDir}" && "${updCfg.toolPath}"${levelFlag}`;
+
+      const env = { ...process.env };
+      if (updCfg.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
+      if (updCfg.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
+
+      try {
+        const { stdout, stderr } = await execAsync(cmd, { env, timeout: 300000 }); // 5-min timeout
+
+        // Read new level
+        let levelAfter = "unknown";
+        try {
+          const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+          levelAfter = u["update-level"] ?? "unknown";
+        } catch { /* ignore */ }
+
+        const upgraded = levelAfter !== levelBefore;
+        results.push(
+          `${upgraded ? "✅" : "⏭️ "} ${c.label}\n` +
+          `   Level: ${levelBefore} → ${levelAfter}${level ? ` (target: ${level})` : " (latest)"}\n` +
+          (stdout ? `   Output: ${stdout.trim().split("\n").slice(-3).join(" | ")}` : "")
+        );
+      } catch (err) {
+        results.push(`❌ ${c.label} — update failed:\n   ${err.message.split("\n")[0]}`);
+      }
+    }
+
+    return { content: [{ type: "text", text: "Update Results:\n\n" + results.join("\n\n") }] };
+  }
+);
+
+// ── Tool: revert_updates ──────────────────────────────────────────────────────
+server.tool(
+  "revert_updates",
+  "Revert the last WSO2 U2 update applied to a component. The component must be stopped first.",
+  {
+    component: z.enum(["tm", "acp", "gw"])
+      .describe("Component to revert"),
+  },
+  async ({ component }) => {
+    const updCfg = CONFIG.updates;
+    if (!updCfg?.toolPath) {
+      return { content: [{ type: "text", text: "❌ 'updates.toolPath' not set in config.json." }] };
+    }
+    if (!existsSync(updCfg.toolPath)) {
+      return { content: [{ type: "text", text: `❌ Update tool not found at: ${updCfg.toolPath}` }] };
+    }
+
+    const c = CONFIG.components[component];
+    const productDir = `${CONFIG.baseDir}/${c.dir}`;
+
+    if (isRunning(component)) {
+      return { content: [{ type: "text", text: `⚠️  ${c.label} is still running. Stop it before reverting.` }] };
+    }
+
+    let levelBefore = "unknown";
+    try {
+      const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+      levelBefore = u["update-level"] ?? "unknown";
+    } catch { /* ignore */ }
+
+    const env = { ...process.env };
+    if (updCfg.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
+    if (updCfg.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
+
+    try {
+      const { stdout } = await execAsync(
+        `cd "${productDir}" && "${updCfg.toolPath}" revert`,
+        { env, timeout: 120000 }
+      );
+
+      let levelAfter = "unknown";
+      try {
+        const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+        levelAfter = u["update-level"] ?? "unknown";
+      } catch { /* ignore */ }
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ ${c.label} reverted successfully.\n` +
+                `   Level: ${levelBefore} → ${levelAfter}\n` +
+                (stdout ? `   Output: ${stdout.trim()}` : ""),
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Revert failed:\n${err.message}` }] };
+    }
+  }
+);
+
+
 
 server.resource(
   "deployment-config",
