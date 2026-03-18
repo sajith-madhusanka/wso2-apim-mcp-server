@@ -337,11 +337,61 @@ Restart Windsurf. Tools become available in the **Cascade** AI panel.
 
 ---
 
+### Claude CLI (Claude Code)
+
+**Install Claude CLI:** `npm install -g @anthropic-ai/claude-code`
+
+**Option A — CLI command (recommended):**
+
+```bash
+claude mcp add wso2-apim node /absolute/path/to/wso2-apim-mcp-server/server.js
+```
+
+**Option B — Config file:** `~/.claude.json`
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+**Option C — Project scope:** `.mcp.json` in your project root
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Verify the server is loaded:
+```bash
+claude mcp list
+```
+
+Then use it interactively:
+```
+claude> Start the Traffic Manager
+claude> Check status of all APIM components
+```
+
+---
+
 ### Quick Reference
 
 | Client | Config file | Restart required |
 |--------|-------------|-----------------|
 | GitHub Copilot CLI | `~/.copilot/mcp-config.json` | New session (`/mcp`) |
+| Claude CLI (Code) | `~/.claude.json` or `claude mcp add` | No |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | Yes |
 | VS Code | User `settings.json` or `.vscode/mcp.json` | Reload window |
 | Cursor | `~/.cursor/mcp.json` | Yes |
