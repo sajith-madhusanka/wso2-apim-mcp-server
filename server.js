@@ -613,7 +613,9 @@ server.tool(
 // ── Tool: apply_updates ───────────────────────────────────────────────────────
 server.tool(
   "apply_updates",
-  "Apply WSO2 U2 updates to one or all components using the wso2update tool. Credentials and tool path must be set in config.json under 'updates'. The component must be stopped before updating.",
+  "Apply WSO2 U2 updates to one or all components using the wso2update tool. " +
+  "Runs the update binary from each component's own home directory. " +
+  "Credentials must be set in config.json under 'updates'. The component is stopped automatically before updating.",
   {
     component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Component to update, or 'all' for all components"),
@@ -624,19 +626,6 @@ server.tool(
   },
   async ({ component, level, stopFirst }) => {
     const updCfg = CONFIG.updates;
-    if (!updCfg?.toolPath) {
-      return {
-        content: [{
-          type: "text",
-          text: "❌ 'updates.toolPath' not set in config.json.\n" +
-                "Download the WSO2 update tool from https://updates.wso2.com and set:\n" +
-                '  "updates": { "toolPath": "/path/to/wso2update_darwin", "credentials": { "username": "...", "password": "..." } }',
-        }],
-      };
-    }
-    if (!existsSync(updCfg.toolPath)) {
-      return { content: [{ type: "text", text: `❌ Update tool not found at: ${updCfg.toolPath}` }] };
-    }
 
     const targets = component === "all"
       ? Object.keys(CONFIG.components)
@@ -650,6 +639,28 @@ server.tool(
 
       if (!existsSync(productDir)) {
         results.push(`⚠️  ${c.label} — directory not found, skipping`);
+        continue;
+      }
+
+      // Resolve binary: prefer per-component bin/ dir, fall back to config toolPath
+      const arch = process.arch;
+      const binDir = `${productDir}/bin`;
+      let toolPath = updCfg?.toolPath;
+      try {
+        const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
+        const bins = lsOut.trim().split("\n").filter(Boolean);
+        if (bins.length > 0) {
+          const match = bins.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
+          toolPath = match ?? bins[0];
+        }
+      } catch { /* use fallback */ }
+
+      if (!toolPath) {
+        results.push(`❌ ${c.label} — no wso2update binary found in ${binDir} and 'updates.toolPath' not set.\nRun setup_update_tool first.`);
+        continue;
+      }
+      if (!existsSync(toolPath)) {
+        results.push(`❌ ${c.label} — binary not found at: ${toolPath}`);
         continue;
       }
 
@@ -681,16 +692,16 @@ server.tool(
         continue;
       }
 
-      // Build update command
+      // Run update from the component's own home directory
       const levelFlag = level !== undefined ? ` --level ${level}` : "";
-      const cmd = `cd "${productDir}" && "${updCfg.toolPath}"${levelFlag}`;
+      const cmd = `cd "${productDir}" && "${toolPath}"${levelFlag}`;
 
       const env = { ...process.env };
-      if (updCfg.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
-      if (updCfg.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
+      if (updCfg?.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
+      if (updCfg?.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
 
       try {
-        const { stdout, stderr } = await execAsync(cmd, { env, timeout: 300000 }); // 5-min timeout
+        const { stdout } = await execAsync(cmd, { env, timeout: 300000 }); // 5-min timeout
 
         // Read new level
         let levelAfter = "unknown";
@@ -702,6 +713,8 @@ server.tool(
         const upgraded = levelAfter !== levelBefore;
         results.push(
           `${upgraded ? "✅" : "⏭️ "} ${c.label}\n` +
+          `   Home: ${productDir}\n` +
+          `   Binary: ${toolPath}\n` +
           `   Level: ${levelBefore} → ${levelAfter}${level ? ` (target: ${level})` : " (latest)"}\n` +
           (stdout ? `   Output: ${stdout.trim().split("\n").slice(-3).join(" | ")}` : "")
         );
@@ -717,22 +730,35 @@ server.tool(
 // ── Tool: revert_updates ──────────────────────────────────────────────────────
 server.tool(
   "revert_updates",
-  "Revert the last WSO2 U2 update applied to a component. The component must be stopped first.",
+  "Revert the last WSO2 U2 update applied to a component. Runs from the component's own home directory. The component must be stopped first.",
   {
     component: z.enum(["tm", "km", "acp", "gw"])
       .describe("Component to revert"),
   },
   async ({ component }) => {
     const updCfg = CONFIG.updates;
-    if (!updCfg?.toolPath) {
-      return { content: [{ type: "text", text: "❌ 'updates.toolPath' not set in config.json." }] };
-    }
-    if (!existsSync(updCfg.toolPath)) {
-      return { content: [{ type: "text", text: `❌ Update tool not found at: ${updCfg.toolPath}` }] };
-    }
-
     const c = CONFIG.components[component];
     const productDir = `${CONFIG.baseDir}/${c.dir}`;
+
+    // Resolve binary: prefer per-component bin/ dir, fall back to config toolPath
+    const arch = process.arch;
+    const binDir = `${productDir}/bin`;
+    let toolPath = updCfg?.toolPath;
+    try {
+      const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
+      const bins = lsOut.trim().split("\n").filter(Boolean);
+      if (bins.length > 0) {
+        const match = bins.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
+        toolPath = match ?? bins[0];
+      }
+    } catch { /* use fallback */ }
+
+    if (!toolPath) {
+      return { content: [{ type: "text", text: `❌ No wso2update binary found in ${binDir} and 'updates.toolPath' not set.\nRun setup_update_tool first.` }] };
+    }
+    if (!existsSync(toolPath)) {
+      return { content: [{ type: "text", text: `❌ Update tool not found at: ${toolPath}` }] };
+    }
 
     if (isRunning(component)) {
       return { content: [{ type: "text", text: `⚠️  ${c.label} is still running. Stop it before reverting.` }] };
@@ -745,12 +771,12 @@ server.tool(
     } catch { /* ignore */ }
 
     const env = { ...process.env };
-    if (updCfg.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
-    if (updCfg.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
+    if (updCfg?.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
+    if (updCfg?.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
 
     try {
       const { stdout } = await execAsync(
-        `cd "${productDir}" && "${updCfg.toolPath}" revert`,
+        `cd "${productDir}" && "${toolPath}" revert`,
         { env, timeout: 120000 }
       );
 
@@ -764,6 +790,8 @@ server.tool(
         content: [{
           type: "text",
           text: `✅ ${c.label} reverted successfully.\n` +
+                `   Home: ${productDir}\n` +
+                `   Binary: ${toolPath}\n` +
                 `   Level: ${levelBefore} → ${levelAfter}\n` +
                 (stdout ? `   Output: ${stdout.trim()}` : ""),
         }],
@@ -778,77 +806,79 @@ server.tool(
 // ── Tool: setup_update_tool ───────────────────────────────────────────────────
 server.tool(
   "setup_update_tool",
-  "Download the WSO2 U2 update tool binary for the current OS/arch using the bundled update_tool_setup.sh script. " +
-  "Automatically detects and saves the binary path to config.json so apply_updates and revert_updates work without manual setup.",
+  "Download the WSO2 U2 update tool binary into each component's bin/ directory using the bundled update_tool_setup.sh script. " +
+  "Runs per-component so each node has its own binary, matching WSO2's recommended approach. " +
+  "Auto-detects OS/arch. Pass a specific component to set up only that one.",
   {
-    component: z.enum(["tm", "km", "acp", "gw"]).optional()
-      .describe("Which component's bin/ dir to run the setup script from (default: acp)"),
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
+      .describe("Which component(s) to set up the update tool for (default: all)"),
   },
-  async ({ component = "acp" }) => {
-    const c = CONFIG.components[component];
-    const productDir = `${CONFIG.baseDir}/${c.dir}`;
-    const setupScript = `${productDir}/bin/update_tool_setup.sh`;
+  async ({ component = "all" }) => {
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
 
-    if (!existsSync(setupScript)) {
-      return { content: [{ type: "text", text: `❌ update_tool_setup.sh not found at: ${setupScript}\nMake sure the component is extracted first.` }] };
-    }
+    const arch = process.arch;
+    const results = [];
+    let lastBinary = null;
 
-    try {
-      // Run the bundled WSO2 script — it downloads the correct binary for this OS/arch
-      const { stdout, stderr } = await execAsync(
-        `bash "${setupScript}"`,
-        { timeout: 120000 }
-      );
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const productDir = `${CONFIG.baseDir}/${c.dir}`;
+      const setupScript = `${productDir}/bin/update_tool_setup.sh`;
 
-      // The script places the binary in the same bin/ dir — find it
-      const binDir = `${productDir}/bin`;
-      const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
-      const binaries = lsOut.trim().split("\n").filter(Boolean);
-
-      if (binaries.length === 0) {
-        return {
-          content: [{
-            type: "text",
-            text: `⚠️  Script ran but no wso2update_* binary found in ${binDir}.\n` +
-                  `Script output:\n${stdout}\n${stderr}`,
-          }],
-        };
+      if (!existsSync(setupScript)) {
+        results.push(`⚠️  ${c.label} — update_tool_setup.sh not found (component extracted?)`);
+        continue;
       }
 
-      // Pick the best match for current arch
-      const arch = process.arch; // 'arm64' or 'x64'
-      let chosen = binaries.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
-      if (!chosen) chosen = binaries[0];
+      try {
+        await execAsync(`bash "${setupScript}"`, { timeout: 120000 });
 
-      // Make it executable
-      await execAsync(`chmod +x "${chosen}"`);
+        const binDir = `${productDir}/bin`;
+        const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
+        const bins = lsOut.trim().split("\n").filter(Boolean);
 
-      // Persist into config.json
+        if (bins.length === 0) {
+          results.push(`⚠️  ${c.label} — script ran but no binary found in ${binDir}`);
+          continue;
+        }
+
+        const match = bins.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
+        const chosen = match ?? bins[0];
+        await execAsync(`chmod +x "${chosen}"`);
+        lastBinary = chosen;
+        results.push(`✅ ${c.label} — ${chosen}`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — ${err.message.split("\n")[0]}`);
+      }
+    }
+
+    // Save fallback toolPath to config.json (used if per-component binary is missing)
+    if (lastBinary) {
       const configPath = new URL("./config.json", import.meta.url).pathname;
       let rawCfg = {};
       try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* new config */ }
       if (!rawCfg.updates) rawCfg.updates = {};
-      rawCfg.updates.toolPath = chosen;
+      rawCfg.updates.toolPath = lastBinary;
       writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
-
-      // Also update live CONFIG so subsequent tool calls in this session work
       if (!CONFIG.updates) CONFIG.updates = {};
-      CONFIG.updates.toolPath = chosen;
-
-      return {
-        content: [{
-          type: "text",
-          text: `✅ WSO2 Update Tool set up successfully!\n` +
-                `   Binary: ${chosen}\n` +
-                `   Saved to config.json as updates.toolPath\n\n` +
-                `You can now use apply_updates and revert_updates without any manual download.\n` +
-                `Set updates.credentials in config.json if not already done:\n` +
-                `  { "updates": { "toolPath": "${chosen}", "credentials": { "username": "your@email", "password": "..." } } }`,
-        }],
-      };
-    } catch (err) {
-      return { content: [{ type: "text", text: `❌ setup_update_tool failed:\n${err.message}` }] };
+      CONFIG.updates.toolPath = lastBinary;
     }
+
+    const summary = results.join("\n");
+    return {
+      content: [{
+        type: "text",
+        text: `WSO2 Update Tool Setup:\n\n${summary}\n\n` +
+              (lastBinary
+                ? `Each component now has its own binary in its bin/ directory.\n` +
+                  `apply_updates and revert_updates will use the per-component binary automatically.\n\n` +
+                  `Next: set updates.credentials in config.json:\n` +
+                  `  "credentials": { "username": "your@email", "password": "..." }`
+                : `⚠️  No binaries were set up. Check that components are extracted first.`),
+      }],
+    };
   }
 );
 
