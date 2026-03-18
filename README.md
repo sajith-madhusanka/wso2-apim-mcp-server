@@ -1,5 +1,8 @@
 # WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
 
+> **Branch:** `cp-tm-gw-km` — **4-node topology** (Control Plane + Traffic Manager + Gateway + Key Manager)
+> For the 3-node setup without a separate Key Manager, see branch [`cp-tm-gw`](../../tree/cp-tm-gw).
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** (Traffic Manager, Key Manager, API Control Plane, Universal Gateway) with MySQL.
 
 Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli) or any MCP-compatible client (Claude Desktop, VS Code, etc.).
@@ -396,11 +399,62 @@ Restart Windsurf. Tools become available in the **Cascade** AI panel.
 
 ---
 
+### Claude CLI (Claude Code)
+
+**Install Claude CLI:** `npm install -g @anthropic-ai/claude-code`
+
+**Option A — CLI command (recommended):**
+
+```bash
+claude mcp add wso2-apim node /absolute/path/to/wso2-apim-mcp-server/server.js
+```
+
+**Option B — Config file:** `~/.claude.json`
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+**Option C — Project scope:** `.mcp.json` in your project root
+
+```json
+{
+  "mcpServers": {
+    "wso2-apim": {
+      "command": "node",
+      "args": ["/absolute/path/to/wso2-apim-mcp-server/server.js"]
+    }
+  }
+}
+```
+
+Verify the server is loaded:
+```bash
+claude mcp list
+```
+
+Then use it interactively:
+```
+claude> Start the Traffic Manager
+claude> Start the Key Manager
+claude> Check status of all APIM components
+```
+
+---
+
 ### Quick Reference
 
 | Client | Config file | Restart required |
 |--------|-------------|-----------------|
 | GitHub Copilot CLI | `~/.copilot/mcp-config.json` | New session (`/mcp`) |
+| Claude CLI (Code) | `~/.claude.json` or `claude mcp add` | No |
 | Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | Yes |
 | VS Code | User `settings.json` or `.vscode/mcp.json` | Reload window |
 | Cursor | `~/.cursor/mcp.json` | Yes |
