@@ -441,6 +441,92 @@ server.tool(
   }
 );
 
+// ── Tool: tail_logs ───────────────────────────────────────────────────────────
+// Opens a new terminal window following a component log file with tail -f.
+// Supports macOS, Linux (GNOME, KDE, XFCE, xterm), and Windows.
+server.tool(
+  "tail_logs",
+  "Open a new terminal window running 'tail -f' on a WSO2 APIM component's log file. " +
+  "The terminal stays open so you can watch new log lines as they arrive in real time. " +
+  "Optionally filter to only ERROR/FATAL lines using grep. " +
+  "Supports macOS Terminal, Linux (gnome-terminal, konsole, xfce4-terminal, xterm), and Windows cmd. " +
+  "Returns immediately after launching the terminal window.",
+  {
+    component: z.enum(["km", "tm", "acp", "gw"]).describe("Component whose log to follow"),
+    errors_only: z.boolean().default(false)
+      .describe("When true, pipe through grep to show only ERROR/FATAL lines"),
+  },
+  async ({ component, errors_only }) => {
+    const c = CONFIG.components[component];
+    const logFile = componentPath(component, c.logFile);
+
+    if (!existsSync(logFile)) {
+      return { content: [{ type: "text", text: `Log file not found: ${logFile}` }] };
+    }
+
+    const tailCmd = errors_only
+      ? `tail -f "${logFile}" | grep -E "ERROR|FATAL"`
+      : `tail -f "${logFile}"`;
+
+    const platform = process.platform;
+    let opened = false;
+    let method = "";
+
+    if (platform === "darwin") {
+      // macOS: AppleScript to open Terminal
+      const script = `tell application "Terminal" to activate\ntell application "Terminal" to do script "${tailCmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      try {
+        await execAsync(`osascript << 'ASCRIPT'\n${script}\nASCRIPT`);
+        opened = true; method = "macOS Terminal";
+      } catch { /* fall through */ }
+
+    } else if (platform === "win32") {
+      // Windows: PowerShell Start-Process to open a new cmd/PowerShell window
+      const winCmd = `Get-Content -Wait "${logFile.replace(/\//g, "\\")}"${errors_only ? " | Select-String 'ERROR|FATAL'" : ""}`;
+      try {
+        spawn("powershell", ["-NoProfile", "-Command", `Start-Process powershell -ArgumentList '-NoExit','-Command',"${winCmd.replace(/"/g, '\\"')}"`], { detached: true, stdio: "ignore" }).unref();
+        opened = true; method = "Windows PowerShell";
+      } catch { /* fall through */ }
+
+    } else {
+      // Linux: try common terminal emulators in order
+      const terminals = [
+        ["gnome-terminal", ["--", "bash", "-c", `${tailCmd}; read`]],
+        ["konsole",        ["-e", "bash", "-c", `${tailCmd}; read`]],
+        ["xfce4-terminal", ["--command", `bash -c '${tailCmd.replace(/'/g, "'\\''")}; read'`]],
+        ["mate-terminal",  ["--command", `bash -c '${tailCmd.replace(/'/g, "'\\''")}; read'`]],
+        ["xterm",          ["-e", `bash -c '${tailCmd.replace(/'/g, "'\\''")}; read'`]],
+      ];
+
+      for (const [bin, args] of terminals) {
+        try {
+          await execAsync(`which ${bin}`);
+          spawn(bin, args, { detached: true, stdio: "ignore" }).unref();
+          opened = true; method = bin;
+          break;
+        } catch { /* not installed, try next */ }
+      }
+    }
+
+    if (opened) {
+      return {
+        content: [{
+          type: "text",
+          text: `🖥️  Opened new terminal (${method}) tailing ${c.label} logs:\n  File: ${logFile}\n  Filter: ${errors_only ? "ERROR/FATAL only" : "all lines"}\n\nClose the terminal window when done.`,
+        }],
+      };
+    }
+
+    // No terminal could be opened — return manual command
+    return {
+      content: [{
+        type: "text",
+        text: `⚠️  Could not detect a supported terminal emulator on ${platform}.\n\nRun this manually in a terminal:\n  ${tailCmd}`,
+      }],
+    };
+  }
+);
+
 // ── Tool: setup_databases ────────────────────────────────────────────────────
 server.tool(
   "setup_databases",
@@ -531,7 +617,13 @@ server.tool(
     if (params.updatesUsername    !== undefined) { set(rawCfg, "updates.credentials.username", params.updatesUsername); changed.push(`updates.credentials.username = "${params.updatesUsername}"`); }
     if (params.updatesPassword    !== undefined) { set(rawCfg, "updates.credentials.password", params.updatesPassword); changed.push(`updates.credentials.password = ****`); }
     if (params.zipTm              !== undefined) { set(rawCfg, "zips.tm", params.zipTm); changed.push(`zips.tm = "${params.zipTm}"`); }
-    if (params.zipAcp             !== undefined) { set(rawCfg, "zips.acp", params.zipAcp); changed.push(`zips.acp = "${params.zipAcp}"`); }
+    if (params.zipAcp             !== undefined) {
+      set(rawCfg, "zips.acp", params.zipAcp); changed.push(`zips.acp = "${params.zipAcp}"`);
+      // KM always uses the ACP archive — auto-set unless caller explicitly provided zipKm
+      if (params.zipKm === undefined && params.zipAcp) {
+        set(rawCfg, "zips.km", params.zipAcp); changed.push(`zips.km = "${params.zipAcp}" (auto from ACP)`);
+      }
+    }
     if (params.zipGw              !== undefined) { set(rawCfg, "zips.gw", params.zipGw); changed.push(`zips.gw = "${params.zipGw}"`); }
     if (params.zipKm              !== undefined) { set(rawCfg, "zips.km", params.zipKm); changed.push(`zips.km = "${params.zipKm}"`); }
 
@@ -568,7 +660,8 @@ ${"═".repeat(55)}
 📁 Base Directory:
    ${CONFIG.baseDir}
 
-🧩 Components & Ports:
+🧩 Components & Fixed Port Offsets:
+   These offsets are FIXED — always use exactly these values in deployment.toml [server] section.
    Component           Dir                        Offset  Mgt HTTPS
    ─────────────────────────────────────────────────────────────────
    Key Manager         wso2am-km-4.6.0               3     9446
@@ -576,10 +669,14 @@ ${"═".repeat(55)}
    API Control Plane   wso2am-acp-4.6.0              0     9443
    Universal Gateway   wso2am-universal-gw-4.6.0     1     9444 (API: 8244/8281)
 
-🗄️  Databases (MySQL @ localhost:3306):
-   APIM_46_AM_DB      → apim46_am_user   / APIM46_DB@123
-   APIM_46_SHARED_DB  → apim46_shared_user / APIM46_DB@123
-   MySQL admin        → root / Admin@123
+   deployment.toml [server] section example (TM):
+     [server]
+     offset = 2
+
+🗄️  Databases (MySQL @ ${CONFIG.mysql?.host || "localhost"}:${CONFIG.mysql?.port || 3306}):
+   ${CONFIG.databases?.amDb?.name || "APIM_46_AM_DB"}     → ${CONFIG.databases?.amDb?.user || "apim46_am_user"} / ${CONFIG.databases?.amDb?.password || "APIM46_DB@123"}
+   ${CONFIG.databases?.sharedDb?.name || "APIM_46_SHARED_DB"} → ${CONFIG.databases?.sharedDb?.user || "apim46_shared_user"} / ${CONFIG.databases?.sharedDb?.password || "APIM46_DB@123"}
+   MySQL admin → ${CONFIG.mysql?.adminUser || "root"} / ${CONFIG.mysql?.adminPassword || "Admin@123"}
 
 🔗 Portal URLs (ACP):
    Publisher  https://localhost:9443/publisher
@@ -593,7 +690,7 @@ ${"═".repeat(55)}
 
 🔑 Key Manager (KM):
    Service URL  https://localhost:9446/services/
-   Used by ACP and Gateway for token validation/generation
+   KM binary: extracted from the ACP zip (wso2am-acp-*.zip) — started with bin/key-manager.sh
 
 ▶️  Start Order:  TM → KM → ACP → GW
 ⏹️  Stop Order:   GW → ACP → KM → TM
@@ -601,14 +698,573 @@ ${"═".repeat(55)}
 ⚠️  Known Issues & Fixes:
    1. Space in directory path breaks bash sessions
       → Base dir uses underscore: distributed_deployment
-   2. Ampersand (&) in JDBC URLs causes XML parse errors
-      → Use single ?useSSL=false param; set autoReconnect in pool_options
+   2. Ampersand (&) in JDBC URLs breaks XML parsing inside WSO2
+      → Escape & as &amp; when combining multiple query params:
+         url = "jdbc:mysql://localhost:3306/DB?useSSL=false&amp;autoReconnect=true"
    3. create_admin_account must be true on all nodes (shared DB)
    4. Delete .metadata files before restart to force config regeneration
       Path: repository/resources/conf/.metadata/
+   5. Each component auto-starts a diagnostics agent (org.wso2.diagnostics.DiagnosticsApp)
+      → Use the stop_diagnostics tool to stop it if needed
 `,
     }],
   })
+);
+
+// ── Tool: stop_diagnostics ───────────────────────────────────────────────────
+server.tool(
+  "stop_diagnostics",
+  "Stop the WSO2 runtime diagnostics agent (org.wso2.diagnostics.DiagnosticsApp) that auto-starts alongside each component. " +
+  "Each component spawns its own diagnostics process from <component>/diagnostics-tool/. " +
+  "This tool finds and terminates those processes without affecting the main server process.",
+  {
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
+      .describe("Which component's diagnostics to stop, or 'all' for all components"),
+  },
+  async ({ component }) => {
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const componentDir = `${CONFIG.baseDir}/${c.dir}`;
+      const diagMarker = `${componentDir}/diagnostics-tool`;
+
+      try {
+        // Find all java processes whose args include this component's diagnostics-tool path
+        const { stdout } = await execAsync(
+          `ps ax -o pid,args | grep "org.wso2.diagnostics.DiagnosticsApp" | grep -F "${diagMarker}" | grep -v grep`
+        );
+
+        const pids = stdout.trim().split("\n")
+          .map(line => parseInt(line.trim().split(/\s+/)[0]))
+          .filter(pid => !isNaN(pid));
+
+        if (pids.length === 0) {
+          results.push(`⚪ ${c.label} — diagnostics agent not running`);
+          continue;
+        }
+
+        for (const pid of pids) {
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch { /* already gone */ }
+        }
+
+        // Brief wait and verify
+        await new Promise(r => setTimeout(r, 1500));
+        const stillAlive = pids.filter(pid => {
+          try { process.kill(pid, 0); return true; } catch { return false; }
+        });
+
+        if (stillAlive.length > 0) {
+          stillAlive.forEach(pid => { try { process.kill(pid, "SIGKILL"); } catch { /* ignore */ } });
+          results.push(`🛑 ${c.label} — diagnostics agent (pid ${pids.join(", ")}) killed (SIGKILL)`);
+        } else {
+          results.push(`🛑 ${c.label} — diagnostics agent (pid ${pids.join(", ")}) stopped`);
+        }
+      } catch (err) {
+        // grep exits with code 1 when no matching process found — that's "not running"
+        if (err.code === 1) {
+          results.push(`⚪ ${c.label} — diagnostics agent not running`);
+        } else {
+          results.push(`❌ ${c.label} — error: ${err.message.split("\n")[0]}`);
+        }
+      }
+    }
+
+    return { content: [{ type: "text", text: "Stop Diagnostics Results:\n" + results.join("\n") }] };
+  }
+);
+
+// ── Tool: apply_config ───────────────────────────────────────────────────────
+// Generates and writes deployment.toml for each component based on CONFIG values.
+// Only deployment.toml is touched — no other files are modified.
+server.tool(
+  "apply_config",
+  "Generate and write deployment.toml for each WSO2 APIM component based on current config.json values " +
+  "(MySQL host/port, database names/users/passwords, admin credentials). " +
+  "Only deployment.toml is written — no other files are touched. " +
+  "Run this after configure and extract_components, before start_component. " +
+  "Port offsets are FIXED per component and cannot be overridden.",
+  {
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
+      .describe("Which component to configure, or 'all' for all components"),
+  },
+  async ({ component }) => {
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    const { host, port } = CONFIG.mysql;
+    const { amDb, sharedDb } = CONFIG.databases;
+
+    // Build JDBC URL — use &amp; if multiple params needed (XML-safe)
+    const jdbcUrl = (dbName, extraParams = "") => {
+      const base = `jdbc:mysql://${host}:${port}/${dbName}?useSSL=false`;
+      return extraParams ? `${base}&amp;${extraParams}` : base;
+    };
+
+    // ── deployment.toml templates per component ──────────────────────────────
+    const templates = {
+      acp: () => `# =============================================================================
+# WSO2 API Manager 4.6.0 - API Control Plane (ACP)
+# Port offset: 0  →  Management HTTPS: 9443 | HTTP: 9763
+# =============================================================================
+
+[server]
+hostname = "localhost"
+offset = 0
+base_path = "\${carbon.protocol}://\${carbon.host}:\${carbon.management.port}"
+server_role = "control-plane"
+
+[super_admin]
+username = "admin"
+password = "admin"
+create_admin_account = true
+
+[user_store]
+type = "database_unique_id"
+
+# ---------------------------------------------------------------------------
+# Database: API Manager DB  (APIs, Applications, Subscriptions, Throttling)
+# ---------------------------------------------------------------------------
+[database.apim_db]
+type = "mysql"
+url = "${jdbcUrl(amDb.name)}"
+username = "${amDb.user}"
+password = "${amDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.apim_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# ---------------------------------------------------------------------------
+# Database: Shared DB  (User management, Registry)
+# ---------------------------------------------------------------------------
+[database.shared_db]
+type = "mysql"
+url = "${jdbcUrl(sharedDb.name)}"
+username = "${sharedDb.user}"
+password = "${sharedDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.shared_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# Local H2 (IS-specific per-node data — keep as H2)
+[database.local]
+url = "jdbc:h2:./repository/database/WSO2CARBON_DB;DB_CLOSE_ON_EXIT=FALSE"
+
+# ---------------------------------------------------------------------------
+# Keystores
+# ---------------------------------------------------------------------------
+[keystore.tls]
+file_name = "wso2carbon.jks"
+type = "JKS"
+password = "wso2carbon"
+alias = "wso2carbon"
+key_password = "wso2carbon"
+
+# ---------------------------------------------------------------------------
+# Gateway environment — points to the Universal Gateway (offset 1)
+# GW Management: 9444 | GW API HTTPS: 8244 | GW API HTTP: 8281
+# ---------------------------------------------------------------------------
+[apim]
+gateway_type = "Regular,APK,AWS,Azure,Kong,Envoy"
+
+[[apim.gateway.environment]]
+name = "Default"
+type = "hybrid"
+gateway_type = "Regular"
+provider = "wso2"
+display_in_api_console = true
+description = "This is a hybrid gateway that handles both production and sandbox token traffic."
+show_as_token_endpoint_url = true
+service_url = "https://localhost:9444/services/"
+username = "\${admin.username}"
+password = "\${admin.password}"
+ws_endpoint = "ws://localhost:9099"
+wss_endpoint = "wss://localhost:8099"
+http_endpoint = "http://localhost:8281"
+https_endpoint = "https://localhost:8244"
+
+# ---------------------------------------------------------------------------
+# Key Manager — delegate token operations to external KM (offset 3 → 9446)
+# ---------------------------------------------------------------------------
+[apim.key_manager]
+service_url = "https://localhost:9446/services/"
+username = "\$ref{super_admin.username}"
+password = "\$ref{super_admin.password}"
+
+# ---------------------------------------------------------------------------
+# Throttling — publish policies to Traffic Manager (offset 2)
+# TM Binary:  tcp://localhost:9613  |  ssl://localhost:9713
+# TM JMS/MB:  tcp://localhost:5674
+# ---------------------------------------------------------------------------
+[apim.throttling]
+enable_data_publishing = true
+enable_policy_deploy = true
+enable_blacklist_condition = true
+enable_persistence = true
+throttle_decision_endpoints = ["tcp://localhost:5674"]
+
+[[apim.throttling.url_group]]
+traffic_manager_urls = ["tcp://localhost:9613"]
+traffic_manager_auth_urls = ["ssl://localhost:9713"]
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+[apim.cors]
+allow_origins = "*"
+allow_methods = ["GET","PUT","POST","DELETE","PATCH","OPTIONS"]
+allow_headers = ["authorization","Access-Control-Allow-Origin","Content-Type","SOAPAction","apikey","Internal-Key"]
+allow_credentials = false
+
+[[event_handler]]
+name = "userPostSelfRegistration"
+subscriptions = ["POST_ADD_USER"]
+
+[service_provider]
+sp_name_regex = "^[\\\\sa-zA-Z0-9._-]*$"
+
+[[event_listener]]
+id = "token_revocation"
+type = "org.wso2.carbon.identity.core.handler.AbstractIdentityHandler"
+name = "org.wso2.is.notification.ApimOauthEventInterceptor"
+order = 1
+
+[event_listener.properties]
+notification_endpoint = "https://localhost:\${mgt.transport.https.port}/internal/data/v1/notify"
+username = "\${admin.username}"
+password = "\${admin.password}"
+'header.X-WSO2-KEY-MANAGER' = "default"
+`,
+
+      tm: () => `# =============================================================================
+# WSO2 API Manager 4.6.0 - Traffic Manager (TM)
+# Port offset: 2  →  Management HTTPS: 9445 | HTTP: 9765
+#                    Binary:  tcp:9613 / ssl:9713
+#                    JMS/MB:  tcp:5674
+# =============================================================================
+
+[server]
+hostname = "localhost"
+offset = 2
+server_role = "traffic-manager"
+
+[super_admin]
+username = "admin"
+password = "admin"
+create_admin_account = true
+
+[user_store]
+type = "database_unique_id"
+
+# ---------------------------------------------------------------------------
+# Database: API Manager DB  (Throttling policies)
+# ---------------------------------------------------------------------------
+[database.apim_db]
+type = "mysql"
+url = "${jdbcUrl(amDb.name)}"
+username = "${amDb.user}"
+password = "${amDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.apim_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# ---------------------------------------------------------------------------
+# Database: Shared DB  (User management, Registry)
+# ---------------------------------------------------------------------------
+[database.shared_db]
+type = "mysql"
+url = "${jdbcUrl(sharedDb.name)}"
+username = "${sharedDb.user}"
+password = "${sharedDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.shared_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# ---------------------------------------------------------------------------
+# Keystores
+# ---------------------------------------------------------------------------
+[keystore.tls]
+file_name = "wso2carbon.jks"
+type = "JKS"
+password = "wso2carbon"
+alias = "wso2carbon"
+key_password = "wso2carbon"
+
+[truststore]
+file_name = "client-truststore.jks"
+type = "JKS"
+password = "wso2carbon"
+
+# ---------------------------------------------------------------------------
+# Event Hub — TM does not subscribe to ACP event hub
+# ---------------------------------------------------------------------------
+[apim.event_hub]
+enable = false
+`,
+
+      gw: () => `# =============================================================================
+# WSO2 API Manager 4.6.0 - Universal Gateway (GW)
+# Port offset: 1  →  Management HTTPS: 9444 | HTTP: 9764
+#                    API HTTPS: 8244 | API HTTP: 8281
+# =============================================================================
+
+[server]
+hostname = "localhost"
+offset = 1
+server_role = "gateway-worker"
+
+[super_admin]
+username = "admin"
+password = "admin"
+create_admin_account = true
+
+[user_store]
+type = "database_unique_id"
+
+# ---------------------------------------------------------------------------
+# Database: Shared DB  (Registry — gateway only needs shared_db)
+# ---------------------------------------------------------------------------
+[database.shared_db]
+type = "mysql"
+url = "${jdbcUrl(sharedDb.name)}"
+username = "${sharedDb.user}"
+password = "${sharedDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.shared_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# ---------------------------------------------------------------------------
+# Keystores
+# ---------------------------------------------------------------------------
+[keystore.tls]
+file_name = "wso2carbon.jks"
+type = "JKS"
+password = "wso2carbon"
+alias = "wso2carbon"
+key_password = "wso2carbon"
+
+[truststore]
+file_name = "client-truststore.jks"
+type = "JKS"
+password = "wso2carbon"
+
+# ---------------------------------------------------------------------------
+# Key Manager — validate tokens via external KM (offset 3 → port 9446)
+# ---------------------------------------------------------------------------
+[apim.key_manager]
+service_url = "https://localhost:9446/services/"
+username = "\$ref{super_admin.username}"
+password = "\$ref{super_admin.password}"
+
+# ---------------------------------------------------------------------------
+# Event Hub — pull API artifacts from ACP (offset 0 → port 9443 / JMS 5672)
+# ---------------------------------------------------------------------------
+[apim.event_hub]
+enable = true
+username = "\$ref{super_admin.username}"
+password = "\$ref{super_admin.password}"
+service_url = "https://localhost:9443/services/"
+event_listening_endpoints = ["tcp://localhost:5672"]
+
+# ---------------------------------------------------------------------------
+# Throttling — send throttle data to Traffic Manager (offset 2)
+# TM Binary:  tcp://localhost:9613  |  ssl://localhost:9713
+# TM JMS/MB:  tcp://localhost:5674
+# ---------------------------------------------------------------------------
+[apim.throttling]
+throttle_decision_endpoints = ["tcp://localhost:5674"]
+
+[[apim.throttling.url_group]]
+traffic_manager_urls = ["tcp://localhost:9613"]
+traffic_manager_auth_urls = ["ssl://localhost:9713"]
+
+[apim.sync_runtime_artifacts.gateway]
+gateway_labels = ["Default"]
+
+[apim.jwt]
+enable = true
+encoding = "base64"
+header = "X-JWT-Assertion"
+signing_algorithm = "SHA256withRSA"
+enable_user_claims = true
+
+[apim.oauth_config]
+remove_outbound_auth_header = true
+auth_header = "Authorization"
+
+[apim.cors]
+allow_origins = "*"
+allow_methods = ["GET","PUT","POST","DELETE","PATCH","OPTIONS"]
+allow_headers = ["authorization","Access-Control-Allow-Origin","Content-Type","SOAPAction","apikey","Internal-Key"]
+allow_credentials = false
+
+[apim.cache.gateway_token]
+enable = true
+expiry_time = 15
+
+[apim.cache.resource]
+enable = true
+
+[apim.cache.jwt_claim]
+enable = true
+expiry_time = 900
+
+[apim.analytics]
+enable = false
+`,
+
+      km: () => `# =============================================================================
+# WSO2 API Manager 4.6.0 - Key Manager (KM)
+# Port offset: 3  →  Management HTTPS: 9446 | HTTP: 9766
+# =============================================================================
+
+[server]
+hostname = "localhost"
+offset = 3
+server_role = "key-manager"
+
+[super_admin]
+username = "admin"
+password = "admin"
+create_admin_account = true
+
+[user_store]
+type = "database_unique_id"
+
+# ---------------------------------------------------------------------------
+# Database: API Manager DB  (OAuth2 tokens, applications, keys)
+# ---------------------------------------------------------------------------
+[database.apim_db]
+type = "mysql"
+url = "${jdbcUrl(amDb.name)}"
+username = "${amDb.user}"
+password = "${amDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.apim_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# ---------------------------------------------------------------------------
+# Database: Shared DB  (User management, Registry)
+# ---------------------------------------------------------------------------
+[database.shared_db]
+type = "mysql"
+url = "${jdbcUrl(sharedDb.name)}"
+username = "${sharedDb.user}"
+password = "${sharedDb.password}"
+driver = "com.mysql.cj.jdbc.Driver"
+
+[database.shared_db.pool_options]
+validationQuery = "SELECT 1"
+autoReconnect = true
+
+# Local H2 (per-node IS data — keep as H2)
+[database.local]
+url = "jdbc:h2:./repository/database/WSO2CARBON_DB;DB_CLOSE_ON_EXIT=FALSE"
+
+# ---------------------------------------------------------------------------
+# Keystores
+# ---------------------------------------------------------------------------
+[keystore.tls]
+file_name = "wso2carbon.jks"
+type = "JKS"
+password = "wso2carbon"
+alias = "wso2carbon"
+key_password = "wso2carbon"
+
+[truststore]
+file_name = "client-truststore.jks"
+type = "JKS"
+password = "wso2carbon"
+
+# ---------------------------------------------------------------------------
+# Event Hub — subscribe to key management events from ACP (offset 0 → 9443)
+# ---------------------------------------------------------------------------
+[apim.event_hub]
+enable = true
+username = "\$ref{super_admin.username}"
+password = "\$ref{super_admin.password}"
+service_url = "https://localhost:9443/services/"
+event_listening_endpoints = ["tcp://localhost:5672"]
+
+# ---------------------------------------------------------------------------
+# Throttling — KM publishes OAuth events; connect to TM (offset 2)
+# ---------------------------------------------------------------------------
+[apim.throttling]
+enable_data_publishing = false
+
+[[apim.throttling.url_group]]
+traffic_manager_urls = ["tcp://localhost:9613"]
+traffic_manager_auth_urls = ["ssl://localhost:9713"]
+
+[[event_handler]]
+name = "userPostSelfRegistration"
+subscriptions = ["POST_ADD_USER"]
+
+[service_provider]
+sp_name_regex = "^[\\\\sa-zA-Z0-9._-]*$"
+
+[[event_listener]]
+id = "token_revocation"
+type = "org.wso2.carbon.identity.core.handler.AbstractIdentityHandler"
+name = "org.wso2.is.notification.ApimOauthEventInterceptor"
+order = 1
+
+[event_listener.properties]
+notification_endpoint = "https://localhost:\${mgt.transport.https.port}/internal/data/v1/notify"
+username = "\${admin.username}"
+password = "\${admin.password}"
+'header.X-WSO2-KEY-MANAGER' = "default"
+`,
+    };
+
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const confDir = componentPath(key, "repository/conf");
+      const tomlPath = `${confDir}/deployment.toml`;
+
+      if (!existsSync(confDir)) {
+        results.push(`❌ ${c.label} — component not extracted (${confDir} not found). Run extract_components first.`);
+        continue;
+      }
+
+      try {
+        const content = templates[key]();
+        writeFileSync(tomlPath, content, "utf8");
+        results.push(`✅ ${c.label} — deployment.toml written: ${tomlPath}`);
+      } catch (err) {
+        results.push(`❌ ${c.label} — failed to write deployment.toml: ${err.message}`);
+      }
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `Apply Config Results:\n\n` + results.join("\n") +
+              `\n\nℹ️  Only deployment.toml was modified. Start order: TM → KM → ACP → GW`,
+      }],
+    };
+  }
 );
 
 // ── Tool: extract_components ─────────────────────────────────────────────────
@@ -635,16 +1291,43 @@ server.tool(
 
     for (const key of targets) {
       const c = CONFIG.components[key];
-      const zipPath = zips[key];
       const targetDir = `${CONFIG.baseDir}/${c.dir}`;
 
-      if (!zipPath) {
-        results.push(`⚠️  ${c.label} — no zip path in config.zips.${key}`);
-        continue;
-      }
-      if (!existsSync(zipPath)) {
-        results.push(`❌ ${c.label} — zip not found: ${zipPath}`);
-        continue;
+      // Component zip prefix patterns (U2 level suffix is ignored — match by prefix only)
+      const prefixMap = {
+        tm:  "wso2am-tm-",
+        acp: "wso2am-acp-",
+        gw:  "wso2am-universal-gw-",
+        km:  "wso2am-acp-",   // KM reuses the ACP zip
+      };
+      const prefix = prefixMap[key];
+
+      // Resolve the zip path: use config value if it exists, otherwise scan for any matching zip
+      let zipPath = zips[key];
+      if (!zipPath || !existsSync(zipPath)) {
+        // Scan directories: config zip dir (if set), then baseDir, then cwd
+        const searchDirs = [
+          zipPath ? dirname(zipPath) : null,
+          CONFIG.baseDir,
+          dirname(configPath),
+        ].filter(Boolean);
+
+        let found = null;
+        for (const dir of searchDirs) {
+          try {
+            const { stdout } = await execAsync(`ls "${dir}"/${prefix}*.zip 2>/dev/null | head -1`);
+            const candidate = stdout.trim();
+            if (candidate && existsSync(candidate)) { found = candidate; break; }
+          } catch { /* no match in this dir */ }
+        }
+
+        if (found) {
+          zipPath = found;
+          results.push(`🔍 ${c.label} — located zip by prefix (${prefix}*): ${zipPath}`);
+        } else {
+          results.push(`❌ ${c.label} — no zip found matching prefix "${prefix}*.zip". Set path with configure tool or place zip in ${CONFIG.baseDir}`);
+          continue;
+        }
       }
 
       if (existsSync(targetDir)) {
@@ -1093,6 +1776,114 @@ server.tool(
                 : `⚠️  No binaries were set up. Check that components are extracted first.`),
       }],
     };
+  }
+);
+
+
+// ── Tool: toggle_diagnostics_startup ─────────────────────────────────────────
+// Enables or disables the auto-start of the WSO2 runtime diagnostics agent
+// by commenting / uncommenting the launch line in each component's startup script.
+//
+// The diagnostics tool is launched from the startup script (e.g. api-cp.sh, tm.sh, etc.)
+// with a line like:
+//   "$CARBON_HOME"/diagnostics-tool/bin/diagnostics.sh &
+// This tool wraps that line in an if-block controlled by an env var, or simply
+// comments it out depending on the action requested.
+server.tool(
+  "toggle_diagnostics_startup",
+  "Enable or disable the auto-start of the WSO2 diagnostics agent (DiagnosticsApp) for each component. " +
+  "When disabled, the diagnostics agent will NOT be launched when the component starts up. " +
+  "This edits the component's startup shell script by commenting/uncommenting the diagnostics launch line. " +
+  "Use stop_diagnostics to stop an already-running diagnostics agent.",
+  {
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
+      .describe("Which component to affect, or 'all' for all components"),
+    action: z.enum(["disable", "enable"]).default("disable")
+      .describe("'disable' comments out the diagnostics launch; 'enable' restores it"),
+  },
+  async ({ component, action }) => {
+    const targets = component === "all"
+      ? Object.keys(CONFIG.components)
+      : [component];
+
+    // Map component key → startup script name patterns
+    const scriptNames = {
+      acp: ["api-cp.sh"],
+      km:  ["key-manager.sh"],
+      tm:  ["tm.sh", "traffic-manager.sh"],
+      gw:  ["gateway.sh", "universal-gateway.sh"],
+    };
+
+    const DISABLE_MARKER = "# [DIAGNOSTICS DISABLED by MCP]";
+    const results = [];
+
+    for (const key of targets) {
+      const c = CONFIG.components[key];
+      const binDir = `${CONFIG.baseDir}/${c.dir}/bin`;
+      const candidateNames = scriptNames[key] || [];
+
+      // Find the actual startup script
+      let startupScript = null;
+      for (const name of candidateNames) {
+        const candidate = `${binDir}/${name}`;
+        if (existsSync(candidate)) { startupScript = candidate; break; }
+      }
+
+      // Fallback: scan for any .sh that contains the diagnostics launch line
+      if (!startupScript) {
+        try {
+          const { stdout } = await execAsync(
+            `grep -rl "diagnostics-tool/bin/diagnostics.sh" "${binDir}" 2>/dev/null | head -1`
+          );
+          const found = stdout.trim();
+          if (found) startupScript = found;
+        } catch { /* no match */ }
+      }
+
+      if (!startupScript) {
+        results.push(`⚠️  ${c.label} — startup script not found in ${binDir}`);
+        continue;
+      }
+
+      const content = readFileSync(startupScript, "utf8");
+
+      // Patterns we look for
+      const activePattern = /^("?\$CARBON_HOME"?\/diagnostics-tool\/bin\/diagnostics\.sh\s*&\s*)$/m;
+      const disabledPattern = new RegExp(`^${DISABLE_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n# (.*)$`, "m");
+
+      if (action === "disable") {
+        if (content.includes(DISABLE_MARKER)) {
+          results.push(`⚪ ${c.label} — diagnostics startup already disabled`);
+          continue;
+        }
+        if (!activePattern.test(content)) {
+          results.push(`⚠️  ${c.label} — diagnostics launch line not found in ${startupScript}`);
+          continue;
+        }
+        const updated = content.replace(activePattern, `${DISABLE_MARKER}\n# $1`);
+        writeFileSync(startupScript, updated, "utf8");
+        results.push(`🔇 ${c.label} — diagnostics startup DISABLED in ${startupScript}`);
+
+      } else {
+        // enable: restore commented-out line
+        if (!content.includes(DISABLE_MARKER)) {
+          if (activePattern.test(content)) {
+            results.push(`⚪ ${c.label} — diagnostics startup already enabled`);
+          } else {
+            results.push(`⚠️  ${c.label} — diagnostics launch line not found in ${startupScript}`);
+          }
+          continue;
+        }
+        const updated = content.replace(
+          new RegExp(`${DISABLE_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n# `, "g"),
+          ""
+        );
+        writeFileSync(startupScript, updated, "utf8");
+        results.push(`🔔 ${c.label} — diagnostics startup ENABLED in ${startupScript}`);
+      }
+    }
+
+    return { content: [{ type: "text", text: `Toggle Diagnostics Startup (action=${action}):\n` + results.join("\n") }] };
   }
 );
 
