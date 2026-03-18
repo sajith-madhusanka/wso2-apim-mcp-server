@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -774,6 +774,83 @@ server.tool(
   }
 );
 
+
+// ── Tool: setup_update_tool ───────────────────────────────────────────────────
+server.tool(
+  "setup_update_tool",
+  "Download the WSO2 U2 update tool binary for the current OS/arch using the bundled update_tool_setup.sh script. " +
+  "Automatically detects and saves the binary path to config.json so apply_updates and revert_updates work without manual setup.",
+  {
+    component: z.enum(["tm", "km", "acp", "gw"]).optional()
+      .describe("Which component's bin/ dir to run the setup script from (default: acp)"),
+  },
+  async ({ component = "acp" }) => {
+    const c = CONFIG.components[component];
+    const productDir = `${CONFIG.baseDir}/${c.dir}`;
+    const setupScript = `${productDir}/bin/update_tool_setup.sh`;
+
+    if (!existsSync(setupScript)) {
+      return { content: [{ type: "text", text: `❌ update_tool_setup.sh not found at: ${setupScript}\nMake sure the component is extracted first.` }] };
+    }
+
+    try {
+      // Run the bundled WSO2 script — it downloads the correct binary for this OS/arch
+      const { stdout, stderr } = await execAsync(
+        `bash "${setupScript}"`,
+        { timeout: 120000 }
+      );
+
+      // The script places the binary in the same bin/ dir — find it
+      const binDir = `${productDir}/bin`;
+      const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
+      const binaries = lsOut.trim().split("\n").filter(Boolean);
+
+      if (binaries.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️  Script ran but no wso2update_* binary found in ${binDir}.\n` +
+                  `Script output:\n${stdout}\n${stderr}`,
+          }],
+        };
+      }
+
+      // Pick the best match for current arch
+      const arch = process.arch; // 'arm64' or 'x64'
+      let chosen = binaries.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
+      if (!chosen) chosen = binaries[0];
+
+      // Make it executable
+      await execAsync(`chmod +x "${chosen}"`);
+
+      // Persist into config.json
+      const configPath = new URL("./config.json", import.meta.url).pathname;
+      let rawCfg = {};
+      try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* new config */ }
+      if (!rawCfg.updates) rawCfg.updates = {};
+      rawCfg.updates.toolPath = chosen;
+      writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
+
+      // Also update live CONFIG so subsequent tool calls in this session work
+      if (!CONFIG.updates) CONFIG.updates = {};
+      CONFIG.updates.toolPath = chosen;
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ WSO2 Update Tool set up successfully!\n` +
+                `   Binary: ${chosen}\n` +
+                `   Saved to config.json as updates.toolPath\n\n` +
+                `You can now use apply_updates and revert_updates without any manual download.\n` +
+                `Set updates.credentials in config.json if not already done:\n` +
+                `  { "updates": { "toolPath": "${chosen}", "credentials": { "username": "your@email", "password": "..." } } }`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ setup_update_tool failed:\n${err.message}` }] };
+    }
+  }
+);
 
 
 server.resource(
