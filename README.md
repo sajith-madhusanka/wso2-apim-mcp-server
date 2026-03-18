@@ -46,12 +46,11 @@ Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents
 
 - **Node.js 18+** (tested on v20)
 - **MySQL 8.x** running locally
-- WSO2 APIM 4.6.0 ZIPs extracted into your `baseDir`:
-  - `wso2am-tm-4.6.0` (from `wso2am-tm-4.6.0.17.zip`)
-  - `wso2am-km-4.6.0` (extracted from `wso2am-acp-4.6.0.18.zip` — KM uses the ACP binary with `bin/key-manager.sh`)
-  - `wso2am-acp-4.6.0` (from `wso2am-acp-4.6.0.18.zip`)
-  - `wso2am-universal-gw-4.6.0` (from `wso2am-universal-gw-4.6.0.zip`)
-- MySQL JDBC connector JAR (`mysql-connector-java-8.x.jar`) copied into each component's `repository/components/lib/`
+- WSO2 APIM 4.6.0 ZIP files (point `config.json → zips` at them; the `extract_components` tool handles extraction):
+  - `wso2am-tm-4.6.0.17.zip`
+  - `wso2am-acp-4.6.0.18.zip` (used for both ACP and KM nodes)
+  - `wso2am-universal-gw-4.6.0.zip`
+- MySQL JDBC driver — **downloaded automatically** by the `setup_jdbc_driver` tool (no manual copy needed)
 
 ---
 
@@ -143,6 +142,9 @@ After cloning, configuring `config.json`, and registering the MCP server, run th
 3. "Set up the APIM databases"
 4. "Start all APIM components"
 ```
+
+> The `setup_jdbc_driver` tool downloads the MySQL connector automatically — no manual JAR download required.
+> The `setup_databases` tool creates databases with **`CHARACTER SET latin1`** as required by WSO2 APIM.
 
 The MCP server handles extraction, driver installation, database init, and sequenced startup automatically.
 
@@ -255,6 +257,8 @@ Or via MCP tool:
 ---
 
 ## Database Configuration
+
+Both databases are created with **`CHARACTER SET latin1`** (required by WSO2 APIM — do not use `utf8mb4`).
 
 | Database | User | Purpose |
 |----------|------|---------|
