@@ -176,17 +176,17 @@ Tell the agent (one message is enough):
 ```
 "Set up a WSO2 APIM 4.6.0 distributed deployment.
  Base directory: /path/to/my/deployment
- ZIP files are in /path/to/zips/
- MySQL root password: MyPass123
- WSO2 account: me@example.com / mypassword"
+ WSO2 account: me@example.com / mypassword
+ MySQL root password: MyPass123"
 ```
 
 The agent will:
 1. Call `configure` to save your paths and credentials to `config.json`
-2. Call `extract_components` to unzip all components
-3. Call `setup_jdbc_driver` to download and install the MySQL connector
-4. Call `setup_databases` to create databases and run init scripts
-5. Call `start_all` to start all nodes in the correct order
+2. Ask you to download the APIM profile ZIPs from [wso2.com/api-manager](https://wso2.com/api-manager/) (Enterprise tab → version 4.6.0 → TM, ACP, GW ZIPs) and place them in your base directory
+3. Call `extract_components` to unzip all components
+4. Call `setup_jdbc_driver` to download and install the MySQL connector
+5. Call `setup_databases` to create databases and run init scripts
+6. Call `start_all` to start all nodes in the correct order
 
 ### Subsequent sessions
 
