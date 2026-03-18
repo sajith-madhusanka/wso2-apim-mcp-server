@@ -186,7 +186,8 @@ The agent will:
 3. Call `extract_components` to unzip all components
 4. Call `setup_jdbc_driver` to download and install the MySQL connector
 5. Call `setup_databases` to create databases and run init scripts
-6. Call `start_all` to start all nodes in the correct order
+6. Call `apply_config` to write deployment.toml for every node from config.json values
+7. Call `start_all` to start all nodes in the correct order
 
 ### Subsequent sessions
 
@@ -203,21 +204,25 @@ The agent will:
 
 | Tool | Description |
 |------|-------------|
-| `configure` | Save environment settings (paths, credentials) to `config.json` — called by the agent, not the user |
-| `extract_components` | Extract component ZIPs into `baseDir` — KM auto-renamed from ACP zip |
+| `configure` | Save environment settings (paths, credentials) to `config.json` — called by the agent, not the user. Auto-sets `zips.km = zips.acp`. |
+| `apply_config` | Write `deployment.toml` for each component from current config.json values (DB host/port/name/user/password). Only `deployment.toml` is modified. Port offsets are FIXED. |
+| `extract_components` | Extract component ZIPs into `baseDir` — scans by prefix (e.g. `wso2am-tm-*.zip`) so U2-level suffix is ignored; KM auto-renamed from ACP zip |
 | `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
 | `setup_databases` | Create MySQL databases, users, and run init scripts |
 | `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
 | `start_all` | Start all components in correct order (TM → KM → ACP → GW), halts on first failure |
 | `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
 | `stop_all` | Stop all components in correct order (GW → ACP → KM → TM) |
+| `stop_diagnostics` | Stop the runtime diagnostics agent (`org.wso2.diagnostics.DiagnosticsApp`) that auto-starts with each component |
+| `toggle_diagnostics_startup` | Enable or disable auto-start of the diagnostics agent by editing the component startup script — set `action=disable` to prevent it launching on next start |
 | `check_status` | Live status of all components + portal URLs |
-| `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
+| `view_logs` | Snapshot of recent log lines for any component (supports `errors_only` filter) |
+| `tail_logs` | Open a new terminal window running `tail -f` on a component's log — supports macOS Terminal, Linux (gnome-terminal, konsole, xfce4-terminal, xterm), and Windows PowerShell |
 | `setup_update_tool` | Download the WSO2 U2 binary into each component's `bin/` dir via the bundled `update_tool_setup.sh` |
 | `check_update_level` | Show current U2 level for each component (reads `updates/config.json` — no binary needed) |
 | `apply_updates` | Apply U2 updates per-component; handles credential and conflict prompts automatically |
 | `revert_updates` | Revert the last U2 update on a component |
-| `get_deployment_info` | Full topology, ports, credentials, and known issue fixes |
+| `get_deployment_info` | Full topology, fixed port offsets, credentials, and known issue fixes |
 
 ## Available Resources
 
@@ -390,6 +395,16 @@ MIT
 ---
 
 ## Changelog
+
+### v1.8.0 — Config Propagation & Diagnostics Control
+- New `apply_config` tool: generates and writes `deployment.toml` for each component from `config.json` values (MySQL host/port, DB names/users/passwords). Only `deployment.toml` is modified — no other files touched. Port offsets are FIXED per component (ACP:0, GW:1, TM:2, KM:3). Tested on all 4 nodes.
+- New `stop_diagnostics` tool: stops `org.wso2.diagnostics.DiagnosticsApp` that auto-starts with each component. Finds process by `-Dapp.home=<component>/diagnostics-tool` path; SIGTERM → SIGKILL fallback.
+- New `toggle_diagnostics_startup` tool: permanently disable/enable the auto-start of the diagnostics agent by commenting/uncommenting the launch line in each component's startup shell script. Use `action=disable` to prevent it launching on next start; `action=enable` to restore it.
+- New `tail_logs` tool: opens a new terminal window running `tail -f` on a component's log file and returns immediately. Cross-platform: macOS Terminal (AppleScript), Linux (gnome-terminal → konsole → xfce4-terminal → xterm), Windows PowerShell. Supports `errors_only` filter.
+- `configure`: auto-sets `zips.km = zips.acp` when `zipAcp` is provided (KM always uses the ACP archive)
+- `extract_components`: prefix-based zip discovery (`wso2am-tm-*.zip`) — U2 level suffix in filename is ignored; KM prefix mapped to `wso2am-acp-*`
+- `get_deployment_info`: port offsets labelled FIXED with deployment.toml `[server]` example; databases now read from live CONFIG; `&amp;` escaping documented for multi-param JDBC URLs
+- Getting Started flow updated: configure → ZIPs → extract → JDBC → DB → **apply_config** → start
 
 ### v1.6.0 — Agent-managed Configuration
 - New `configure` tool: agent writes `config.json` from conversation — users no longer need to edit it manually
