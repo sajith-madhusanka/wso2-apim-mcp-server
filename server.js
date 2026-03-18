@@ -8,7 +8,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { exec, execSync } from "child_process";
 import { promisify } from "util";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { createRequire } from "module";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -76,7 +76,7 @@ const server = new McpServer({
 server.tool(
   "start_component",
   "Start a WSO2 APIM 4.6.0 component (tm | acp | gw). Start order: tm → acp → gw.",
-  { component: z.enum(["tm", "acp", "gw"]).describe("Component to start: tm, acp, or gw") },
+  { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to start: km, tm, acp, or gw") },
   async ({ component }) => {
     const c = CONFIG.components[component];
     if (isRunning(component)) {
@@ -139,8 +139,8 @@ server.tool(
 // ── Tool: stop_component ─────────────────────────────────────────────────────
 server.tool(
   "stop_component",
-  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). Stop order: GW → ACP → TM.",
-  { component: z.enum(["tm", "acp", "gw"]).describe("Component to stop") },
+  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). Stop order: GW → ACP → KM → TM.",
+  { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
 
@@ -179,10 +179,10 @@ server.tool(
 // ── Tool: stop_all ───────────────────────────────────────────────────────────
 server.tool(
   "stop_all",
-  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → TM.",
+  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → KM → TM.",
   {},
   async () => {
-    const stopOrder = ["gw", "acp", "tm"];
+    const stopOrder = ["gw", "acp", "km", "tm"];
     const results = [];
 
     for (const component of stopOrder) {
@@ -217,10 +217,10 @@ server.tool(
 // ── Tool: start_all ──────────────────────────────────────────────────────────
 server.tool(
   "start_all",
-  "Start all WSO2 APIM 4.6.0 components in the correct order: TM → ACP → GW.",
+  "Start all WSO2 APIM 4.6.0 components in the correct order: TM → KM → ACP → GW.",
   {},
   async () => {
-    const startOrder = ["tm", "acp", "gw"];
+    const startOrder = ["tm", "km", "acp", "gw"];
     const results = [];
 
     for (const component of startOrder) {
@@ -306,7 +306,7 @@ server.tool(
   "view_logs",
   "View recent log lines for a WSO2 APIM 4.6.0 component.",
   {
-    component: z.enum(["tm", "acp", "gw"]).describe("Component whose logs to view"),
+    component: z.enum(["km", "tm", "acp", "gw"]).describe("Component whose logs to view"),
     lines:     z.number().min(10).max(500).default(50).describe("Number of lines to show (default 50)"),
     errors_only: z.boolean().default(false).describe("Show only ERROR/FATAL lines"),
   },
@@ -400,6 +400,7 @@ ${"═".repeat(55)}
 🧩 Components & Ports:
    Component           Dir                        Offset  Mgt HTTPS
    ─────────────────────────────────────────────────────────────────
+   Key Manager         wso2am-km-4.6.0               3     9446
    Traffic Manager     wso2am-tm-4.6.0               2     9445
    API Control Plane   wso2am-acp-4.6.0              0     9443
    Universal Gateway   wso2am-universal-gw-4.6.0     1     9444 (API: 8244/8281)
@@ -419,8 +420,12 @@ ${"═".repeat(55)}
    HTTPS  https://localhost:8244/{context}/{version}
    HTTP   http://localhost:8281/{context}/{version}
 
-▶️  Start Order:  TM → ACP → GW
-⏹️  Stop Order:   GW → ACP → TM
+🔑 Key Manager (KM):
+   Service URL  https://localhost:9446/services/
+   Used by ACP and Gateway for token validation/generation
+
+▶️  Start Order:  TM → KM → ACP → GW
+⏹️  Stop Order:   GW → ACP → KM → TM
 
 ⚠️  Known Issues & Fixes:
    1. Space in directory path breaks bash sessions
@@ -440,7 +445,7 @@ server.tool(
   "extract_components",
   "Extract WSO2 APIM component ZIP files into the base directory. ZIP paths must be set in config.json under 'zips'. KM is extracted from the ACP zip and renamed automatically.",
   {
-    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Which component to extract, or 'all' for all components"),
     overwrite: z.boolean().default(false)
       .describe("If true, delete and re-extract even if the directory already exists"),
@@ -510,7 +515,7 @@ server.tool(
   "setup_jdbc_driver",
   "Download the MySQL JDBC driver JAR from Maven Central and copy it to every component's repository/components/lib/ directory.",
   {
-    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Copy driver to this component only, or 'all' for all components"),
   },
   async ({ component }) => {
@@ -569,7 +574,7 @@ server.tool(
   "check_update_level",
   "Show the current WSO2 U2 update level for each component by reading their updates/config.json. No update tool binary required.",
   {
-    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Component to check, or 'all' for all components"),
   },
   async ({ component }) => {
@@ -610,7 +615,7 @@ server.tool(
   "apply_updates",
   "Apply WSO2 U2 updates to one or all components using the wso2update tool. Credentials and tool path must be set in config.json under 'updates'. The component must be stopped before updating.",
   {
-    component: z.enum(["all", "tm", "acp", "gw"]).default("all")
+    component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Component to update, or 'all' for all components"),
     level: z.number().int().positive().optional()
       .describe("Target U2 level (e.g. 20). Omit to update to the latest available level."),
@@ -714,7 +719,7 @@ server.tool(
   "revert_updates",
   "Revert the last WSO2 U2 update applied to a component. The component must be stopped first.",
   {
-    component: z.enum(["tm", "acp", "gw"])
+    component: z.enum(["tm", "km", "acp", "gw"])
       .describe("Component to revert"),
   },
   async ({ component }) => {
@@ -770,6 +775,83 @@ server.tool(
 );
 
 
+// ── Tool: setup_update_tool ───────────────────────────────────────────────────
+server.tool(
+  "setup_update_tool",
+  "Download the WSO2 U2 update tool binary for the current OS/arch using the bundled update_tool_setup.sh script. " +
+  "Automatically detects and saves the binary path to config.json so apply_updates and revert_updates work without manual setup.",
+  {
+    component: z.enum(["tm", "km", "acp", "gw"]).optional()
+      .describe("Which component's bin/ dir to run the setup script from (default: acp)"),
+  },
+  async ({ component = "acp" }) => {
+    const c = CONFIG.components[component];
+    const productDir = `${CONFIG.baseDir}/${c.dir}`;
+    const setupScript = `${productDir}/bin/update_tool_setup.sh`;
+
+    if (!existsSync(setupScript)) {
+      return { content: [{ type: "text", text: `❌ update_tool_setup.sh not found at: ${setupScript}\nMake sure the component is extracted first.` }] };
+    }
+
+    try {
+      // Run the bundled WSO2 script — it downloads the correct binary for this OS/arch
+      const { stdout, stderr } = await execAsync(
+        `bash "${setupScript}"`,
+        { timeout: 120000 }
+      );
+
+      // The script places the binary in the same bin/ dir — find it
+      const binDir = `${productDir}/bin`;
+      const { stdout: lsOut } = await execAsync(`ls "${binDir}/wso2update_"* 2>/dev/null || true`);
+      const binaries = lsOut.trim().split("\n").filter(Boolean);
+
+      if (binaries.length === 0) {
+        return {
+          content: [{
+            type: "text",
+            text: `⚠️  Script ran but no wso2update_* binary found in ${binDir}.\n` +
+                  `Script output:\n${stdout}\n${stderr}`,
+          }],
+        };
+      }
+
+      // Pick the best match for current arch
+      const arch = process.arch; // 'arm64' or 'x64'
+      let chosen = binaries.find(b => arch === "arm64" ? b.includes("arm64") : !b.includes("arm64"));
+      if (!chosen) chosen = binaries[0];
+
+      // Make it executable
+      await execAsync(`chmod +x "${chosen}"`);
+
+      // Persist into config.json
+      const configPath = new URL("./config.json", import.meta.url).pathname;
+      let rawCfg = {};
+      try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* new config */ }
+      if (!rawCfg.updates) rawCfg.updates = {};
+      rawCfg.updates.toolPath = chosen;
+      writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
+
+      // Also update live CONFIG so subsequent tool calls in this session work
+      if (!CONFIG.updates) CONFIG.updates = {};
+      CONFIG.updates.toolPath = chosen;
+
+      return {
+        content: [{
+          type: "text",
+          text: `✅ WSO2 Update Tool set up successfully!\n` +
+                `   Binary: ${chosen}\n` +
+                `   Saved to config.json as updates.toolPath\n\n` +
+                `You can now use apply_updates and revert_updates without any manual download.\n` +
+                `Set updates.credentials in config.json if not already done:\n` +
+                `  { "updates": { "toolPath": "${chosen}", "credentials": { "username": "your@email", "password": "..." } } }`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ setup_update_tool failed:\n${err.message}` }] };
+    }
+  }
+);
+
 
 server.resource(
   "deployment-config",
@@ -782,6 +864,17 @@ server.resource(
       text: JSON.stringify(CONFIG, null, 2),
     }],
   })
+);
+
+server.resource(
+  "deployment-toml-km",
+  "apim://toml/km",
+  "Key Manager deployment.toml template",
+  async () => {
+    const path = `${CONFIG.baseDir}/${CONFIG.components.km.dir}/repository/conf/deployment.toml`;
+    const text = existsSync(path) ? readFileSync(path, "utf8") : "(file not found)";
+    return { contents: [{ uri: "apim://toml/km", mimeType: "text/plain", text }] };
+  }
 );
 
 server.resource(
