@@ -528,49 +528,156 @@ server.tool(
 );
 
 // ── Tool: setup_databases ────────────────────────────────────────────────────
+// Creates MySQL databases, users, and runs APIM init scripts.
+// If either database already exists, pauses and asks the user whether to
+// proceed with the existing databases or re-configure with new names.
 server.tool(
   "setup_databases",
-  "Create MySQL databases and users for WSO2 APIM 4.6.0 and run initialization scripts.",
-  {},
-  async () => {
+  "Create MySQL databases and users for WSO2 APIM 4.6.0 and run initialization scripts. " +
+  "If either database already exists, the tool reports which ones exist and asks how to proceed. " +
+  "Use action='use_existing' to continue with the current databases (skips re-running init scripts on those DBs). " +
+  "Use action='reconfigure' to stop and update database names via the configure tool first. " +
+  "Use action='force_reinit' to drop and recreate the databases (⚠️ data loss!).",
+  {
+    action: z.enum(["check", "use_existing", "force_reinit", "reconfigure"]).default("check")
+      .describe(
+        "'check' (default): detect existing databases and ask what to do. " +
+        "'use_existing': skip init scripts for existing DBs, only create missing ones. " +
+        "'force_reinit': DROP and recreate existing databases then run init scripts (⚠️ data loss!). " +
+        "'reconfigure': do nothing — stop here so you can call configure with new DB names."
+      ),
+  },
+  async ({ action }) => {
     const { host, port, adminUser, adminPassword } = CONFIG.mysql;
     const { amDb, sharedDb } = CONFIG.databases;
     const acp = CONFIG.components.acp;
     const acpBase = `${CONFIG.baseDir}/${acp.dir}`;
-    const mysqlCmd = (db, sql) =>
-      `mysql -u ${adminUser} -p${adminPassword} -h ${host} -P ${port} ${db} -e "${sql}" 2>&1`;
 
-    const sqlStatements = `
-CREATE DATABASE IF NOT EXISTS ${amDb.name} CHARACTER SET latin1;
-CREATE DATABASE IF NOT EXISTS ${sharedDb.name} CHARACTER SET latin1;
-CREATE USER IF NOT EXISTS '${amDb.user}'@'%' IDENTIFIED WITH mysql_native_password BY '${amDb.password}';
-CREATE USER IF NOT EXISTS '${amDb.user}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${amDb.password}';
-CREATE USER IF NOT EXISTS '${sharedDb.user}'@'%' IDENTIFIED WITH mysql_native_password BY '${sharedDb.password}';
-CREATE USER IF NOT EXISTS '${sharedDb.user}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${sharedDb.password}';
-GRANT ALL PRIVILEGES ON ${amDb.name}.* TO '${amDb.user}'@'%';
-GRANT ALL PRIVILEGES ON ${amDb.name}.* TO '${amDb.user}'@'localhost';
-GRANT ALL PRIVILEGES ON ${sharedDb.name}.* TO '${sharedDb.user}'@'%';
-GRANT ALL PRIVILEGES ON ${sharedDb.name}.* TO '${sharedDb.user}'@'localhost';
-FLUSH PRIVILEGES;
-    `.trim().replace(/\n/g, " ");
+    const mysqlBase = `mysql -u ${adminUser} -p${adminPassword} -h ${host} -P ${port}`;
 
+    // ── Step 1: Check which databases already exist ──────────────────────────
+    let existingDbs = [];
     try {
-      await execAsync(`mysql -u ${adminUser} -p${adminPassword} -h ${host} -P ${port} -e "${sqlStatements}" 2>&1`);
-      await execAsync(`mysql -u ${adminUser} -p${adminPassword} -h ${host} -P ${port} ${sharedDb.name} < "${acpBase}/dbscripts/mysql.sql" 2>&1`);
-      await execAsync(`mysql -u ${adminUser} -p${adminPassword} -h ${host} -P ${port} ${amDb.name} < "${acpBase}/dbscripts/apimgt/mysql.sql" 2>&1`);
+      const { stdout } = await execAsync(
+        `${mysqlBase} -e "SHOW DATABASES LIKE '${amDb.name}';" 2>&1 && ` +
+        `${mysqlBase} -e "SHOW DATABASES LIKE '${sharedDb.name}';" 2>&1`
+      );
+      if (stdout.includes(amDb.name))    existingDbs.push(amDb.name);
+      if (stdout.includes(sharedDb.name)) existingDbs.push(sharedDb.name);
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Could not connect to MySQL:\n${err.message}` }] };
+    }
 
+    // ── Step 2: If action=check and DBs exist → pause and ask ───────────────
+    if (action === "check" && existingDbs.length > 0) {
       return {
         content: [{
           type: "text",
-          text: `✅ Databases set up successfully!\n\n` +
-                `  ${amDb.name}     → user: ${amDb.user}\n` +
-                `  ${sharedDb.name} → user: ${sharedDb.user}\n` +
-                `  Password (both): ${amDb.password}`,
+          text:
+            `⚠️  The following database(s) already exist on ${host}:${port}:\n` +
+            existingDbs.map(d => `  • ${d}`).join("\n") +
+            `\n\nPlease choose how to proceed by calling setup_databases again with one of these actions:\n\n` +
+            `  action="use_existing"  — Skip init scripts for existing databases; only create missing ones.\n` +
+            `                           Safe if this is a re-run and data should be kept.\n\n` +
+            `  action="force_reinit"  — ⚠️  DROP and recreate ALL databases, then re-run init scripts.\n` +
+            `                           Use only if you want a completely fresh setup (DATA WILL BE LOST).\n\n` +
+            `  action="reconfigure"   — Stop here. Call configure first with new amDbName / sharedDbName values,\n` +
+            `                           then call setup_databases again.\n\n` +
+            `Current database names:\n` +
+            `  AM DB:     ${amDb.name}  (user: ${amDb.user})\n` +
+            `  Shared DB: ${sharedDb.name}  (user: ${sharedDb.user})`,
         }],
       };
-    } catch (err) {
-      return { content: [{ type: "text", text: `❌ Database setup failed:\n${err.message}` }] };
     }
+
+    // ── Step 3: handle reconfigure (just return guidance) ───────────────────
+    if (action === "reconfigure") {
+      return {
+        content: [{
+          type: "text",
+          text:
+            `ℹ️  No changes made. To use different database names:\n\n` +
+            `1. Call configure with new database names. Example:\n` +
+            `     configure(amDbName="APIM_46_AM_DB_V2", sharedDbName="APIM_46_SHARED_DB_V2")\n\n` +
+            `2. Then call setup_databases again (action="check").\n\n` +
+            `Current names: ${amDb.name}, ${sharedDb.name}`,
+        }],
+      };
+    }
+
+    // ── Step 4: force_reinit — drop existing databases first ────────────────
+    if (action === "force_reinit" && existingDbs.length > 0) {
+      const dropSql = existingDbs.map(d => `DROP DATABASE IF EXISTS ${d};`).join(" ");
+      try {
+        await execAsync(`${mysqlBase} -e "${dropSql}" 2>&1`);
+      } catch (err) {
+        return { content: [{ type: "text", text: `❌ Failed to drop databases:\n${err.message}` }] };
+      }
+      existingDbs = []; // all dropped — treat as fresh
+    }
+
+    // ── Step 5: Create databases, users, grants ──────────────────────────────
+    // For use_existing: only create databases that don't exist yet
+    const createAmDb     = !existingDbs.includes(amDb.name);
+    const createSharedDb = !existingDbs.includes(sharedDb.name);
+
+    const createSql = [
+      createAmDb     ? `CREATE DATABASE IF NOT EXISTS ${amDb.name} CHARACTER SET latin1;`     : "",
+      createSharedDb ? `CREATE DATABASE IF NOT EXISTS ${sharedDb.name} CHARACTER SET latin1;` : "",
+      `CREATE USER IF NOT EXISTS '${amDb.user}'@'%' IDENTIFIED WITH mysql_native_password BY '${amDb.password}';`,
+      `CREATE USER IF NOT EXISTS '${amDb.user}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${amDb.password}';`,
+      `CREATE USER IF NOT EXISTS '${sharedDb.user}'@'%' IDENTIFIED WITH mysql_native_password BY '${sharedDb.password}';`,
+      `CREATE USER IF NOT EXISTS '${sharedDb.user}'@'localhost' IDENTIFIED WITH mysql_native_password BY '${sharedDb.password}';`,
+      `GRANT ALL PRIVILEGES ON ${amDb.name}.* TO '${amDb.user}'@'%';`,
+      `GRANT ALL PRIVILEGES ON ${amDb.name}.* TO '${amDb.user}'@'localhost';`,
+      `GRANT ALL PRIVILEGES ON ${sharedDb.name}.* TO '${sharedDb.user}'@'%';`,
+      `GRANT ALL PRIVILEGES ON ${sharedDb.name}.* TO '${sharedDb.user}'@'localhost';`,
+      `FLUSH PRIVILEGES;`,
+    ].filter(Boolean).join(" ");
+
+    try {
+      await execAsync(`${mysqlBase} -e "${createSql}" 2>&1`);
+    } catch (err) {
+      return { content: [{ type: "text", text: `❌ Failed to create databases/users:\n${err.message}` }] };
+    }
+
+    // ── Step 6: Run init scripts (skip for existing DBs in use_existing mode) ─
+    const initResults = [];
+
+    if (createSharedDb || action === "force_reinit") {
+      try {
+        await execAsync(`${mysqlBase} ${sharedDb.name} < "${acpBase}/dbscripts/mysql.sql" 2>&1`);
+        initResults.push(`  ✅ ${sharedDb.name} — init script applied`);
+      } catch (err) {
+        initResults.push(`  ⚠️  ${sharedDb.name} — init script error (tables may already exist): ${err.message.split("\n")[0]}`);
+      }
+    } else {
+      initResults.push(`  ⏭️  ${sharedDb.name} — skipped (existing database)`);
+    }
+
+    if (createAmDb || action === "force_reinit") {
+      try {
+        await execAsync(`${mysqlBase} ${amDb.name} < "${acpBase}/dbscripts/apimgt/mysql.sql" 2>&1`);
+        initResults.push(`  ✅ ${amDb.name} — init script applied`);
+      } catch (err) {
+        initResults.push(`  ⚠️  ${amDb.name} — init script error (tables may already exist): ${err.message.split("\n")[0]}`);
+      }
+    } else {
+      initResults.push(`  ⏭️  ${amDb.name} — skipped (existing database)`);
+    }
+
+    const actionLabel = action === "force_reinit" ? "force re-initialized" : action === "use_existing" ? "set up (skipped existing)" : "created fresh";
+    return {
+      content: [{
+        type: "text",
+        text:
+          `✅ Databases ${actionLabel}!\n\n` +
+          `  ${amDb.name}     → user: ${amDb.user}\n` +
+          `  ${sharedDb.name} → user: ${sharedDb.user}\n` +
+          `  Password (both): ${amDb.password}\n\n` +
+          `Init scripts:\n` + initResults.join("\n"),
+      }],
+    };
   }
 );
 
@@ -586,6 +693,8 @@ server.tool(
     mysqlPort:          z.number().int().optional().describe("MySQL port (default: 3306)"),
     mysqlAdminUser:     z.string().optional().describe("MySQL admin username (e.g. root)"),
     mysqlAdminPassword: z.string().optional().describe("MySQL admin password"),
+    amDbName:           z.string().optional().describe("AM database name (e.g. APIM_46_AM_DB). User and password auto-derived from name if not set."),
+    sharedDbName:       z.string().optional().describe("Shared database name (e.g. APIM_46_SHARED_DB). User and password auto-derived from name if not set."),
     updatesUsername:    z.string().optional().describe("WSO2 account email for U2 updates"),
     updatesPassword:    z.string().optional().describe("WSO2 account password for U2 updates"),
     zipTm:              z.string().optional().describe("Absolute path to the TM zip file"),
@@ -614,6 +723,32 @@ server.tool(
     if (params.mysqlPort          !== undefined) { set(rawCfg, "mysql.port", params.mysqlPort); changed.push(`mysql.port = ${params.mysqlPort}`); }
     if (params.mysqlAdminUser     !== undefined) { set(rawCfg, "mysql.adminUser", params.mysqlAdminUser); changed.push(`mysql.adminUser = "${params.mysqlAdminUser}"`); }
     if (params.mysqlAdminPassword !== undefined) { set(rawCfg, "mysql.adminPassword", params.mysqlAdminPassword); changed.push(`mysql.adminPassword = ****`); }
+
+    // Database name changes — auto-derive user/password from name (lowercase, replace - with _)
+    if (params.amDbName !== undefined) {
+      const autoUser = params.amDbName.toLowerCase().replace(/-/g, "_") + "_user";
+      const autoPass = params.amDbName.toLowerCase().replace(/-/g, "_") + "_pass";
+      set(rawCfg, "databases.amDb.name", params.amDbName); changed.push(`databases.amDb.name = "${params.amDbName}"`);
+      // Only override user/pass if not already customised
+      if (!rawCfg.databases?.amDb?.user  || rawCfg.databases.amDb.user  === autoUser.replace(params.amDbName.toLowerCase(), "").trim()) {
+        set(rawCfg, "databases.amDb.user", autoUser); changed.push(`databases.amDb.user = "${autoUser}" (auto)`);
+      }
+      if (!rawCfg.databases?.amDb?.password) {
+        set(rawCfg, "databases.amDb.password", autoPass); changed.push(`databases.amDb.password = "${autoPass}" (auto)`);
+      }
+    }
+    if (params.sharedDbName !== undefined) {
+      const autoUser = params.sharedDbName.toLowerCase().replace(/-/g, "_") + "_user";
+      const autoPass = params.sharedDbName.toLowerCase().replace(/-/g, "_") + "_pass";
+      set(rawCfg, "databases.sharedDb.name", params.sharedDbName); changed.push(`databases.sharedDb.name = "${params.sharedDbName}"`);
+      if (!rawCfg.databases?.sharedDb?.user) {
+        set(rawCfg, "databases.sharedDb.user", autoUser); changed.push(`databases.sharedDb.user = "${autoUser}" (auto)`);
+      }
+      if (!rawCfg.databases?.sharedDb?.password) {
+        set(rawCfg, "databases.sharedDb.password", autoPass); changed.push(`databases.sharedDb.password = "${autoPass}" (auto)`);
+      }
+    }
+
     if (params.updatesUsername    !== undefined) { set(rawCfg, "updates.credentials.username", params.updatesUsername); changed.push(`updates.credentials.username = "${params.updatesUsername}"`); }
     if (params.updatesPassword    !== undefined) { set(rawCfg, "updates.credentials.password", params.updatesPassword); changed.push(`updates.credentials.password = ****`); }
     if (params.zipTm              !== undefined) { set(rawCfg, "zips.tm", params.zipTm); changed.push(`zips.tm = "${params.zipTm}"`); }
