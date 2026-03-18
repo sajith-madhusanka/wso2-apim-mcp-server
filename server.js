@@ -6,7 +6,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { exec, execSync } from "child_process";
+import { exec, execSync, spawn } from "child_process";
 import { promisify } from "util";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { createRequire } from "module";
@@ -15,6 +15,111 @@ import { dirname, join } from "path";
 import { z } from "zod";
 
 const execAsync = promisify(exec);
+
+// ─── Interactive update runner ────────────────────────────────────────────────
+// Runs wso2update via spawn so we can handle interactive prompts:
+//   • Credential prompts  → auto-feed username/password from config
+//   • Conflict prompts    → auto-respond based on conflictResolution strategy
+//   • "Continue?" prompts → always confirm with 'y'
+//
+// Returns { stdout, stderr, conflicts, exitCode }
+//   conflicts: array of { file, resolution } describing every conflict found
+function runUpdateInteractive(toolPath, args, { cwd, env, credentials, conflictResolution = "keep-local", timeoutMs = 300000 }) {
+  return new Promise((resolve) => {
+    const proc = spawn(toolPath, args, {
+      cwd,
+      env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const conflicts = [];
+    let timer;
+
+    const feed = (text) => {
+      try { proc.stdin.write(text); } catch { /* stdin may be closed */ }
+    };
+
+    // Keep a rolling buffer to catch prompts that span chunk boundaries
+    let buffer = "";
+
+    const handleChunk = (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      buffer += text;
+
+      // Only process the latest 512 chars to avoid re-matching old output
+      if (buffer.length > 512) buffer = buffer.slice(-512);
+
+      // ── Credential prompts ──────────────────────────────────────────────────
+      if (/email\s*[:\?]/i.test(buffer) || /username\s*[:\?]/i.test(buffer)) {
+        if (credentials?.username) {
+          feed(credentials.username + "\n");
+          buffer = "";
+        }
+      }
+      if (/password\s*[:\?]/i.test(buffer)) {
+        if (credentials?.password) {
+          feed(credentials.password + "\n");
+          buffer = "";
+        }
+      }
+
+      // ── Conflict prompts ────────────────────────────────────────────────────
+      // WSO2 update tool: "CONFLICT (content): <file>" or "Modified: <file>"
+      const conflictLine = buffer.match(/CONFLICT[^\n]*:\s*([^\n]+)/i);
+      if (conflictLine) {
+        conflicts.push({ file: conflictLine[1].trim(), resolution: conflictResolution });
+      }
+
+      // "Do you want to keep your local changes? [Y/n]:" or similar
+      if (/keep\s+(your|local)\s+change/i.test(buffer) || /keep.*\[Y\/n\]/i.test(buffer)) {
+        const answer = conflictResolution === "keep-local" ? "y\n" : "n\n";
+        feed(answer);
+        buffer = "";
+      }
+
+      // "Do you want to use the updated version? [y/N]:"
+      if (/use.*updated\s+version/i.test(buffer) || /overwrite.*\[y\/N\]/i.test(buffer)) {
+        const answer = conflictResolution === "use-update" ? "y\n" : "n\n";
+        feed(answer);
+        buffer = "";
+      }
+
+      // Generic continue/confirm prompts
+      if (/\bdo you want to continue\b.*\[y\/N\]/i.test(buffer) ||
+          /\bcontinue\?.*\[y\/N\]/i.test(buffer)) {
+        feed("y\n");
+        buffer = "";
+      }
+    };
+
+    proc.stdout.on("data", handleChunk);
+    proc.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      stderr += text;
+      // stderr can also contain prompts
+      buffer += text;
+      handleChunk(Buffer.from(""));  // re-run prompt detection with updated buffer
+    });
+
+    timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      resolve({ stdout, stderr, conflicts, exitCode: -1, timedOut: true });
+    }, timeoutMs);
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, conflicts, exitCode: code ?? 0, timedOut: false });
+    });
+
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr: err.message, conflicts, exitCode: -1, timedOut: false });
+    });
+  });
+}
 
 // ─── Load Configuration ───────────────────────────────────────────────────────
 
@@ -613,9 +718,9 @@ server.tool(
 // ── Tool: apply_updates ───────────────────────────────────────────────────────
 server.tool(
   "apply_updates",
-  "Apply WSO2 U2 updates to one or all components using the wso2update tool. " +
-  "Runs the update binary from each component's own home directory. " +
-  "Credentials must be set in config.json under 'updates'. The component is stopped automatically before updating.",
+  "Apply WSO2 U2 updates to one or all components. Runs the update binary from each component's own home directory. " +
+  "Handles interactive credential prompts automatically. " +
+  "Conflicts (locally modified files that also changed in the update) are auto-resolved per conflictResolution strategy.",
   {
     component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Component to update, or 'all' for all components"),
@@ -623,8 +728,10 @@ server.tool(
       .describe("Target U2 level (e.g. 20). Omit to update to the latest available level."),
     stopFirst: z.boolean().default(true)
       .describe("Stop the component before applying updates (recommended, default: true)"),
+    conflictResolution: z.enum(["keep-local", "use-update"]).default("keep-local")
+      .describe("How to resolve file conflicts: 'keep-local' (default, safe for config files) or 'use-update' (accept WSO2's version)"),
   },
-  async ({ component, level, stopFirst }) => {
+  async ({ component, level, stopFirst, conflictResolution }) => {
     const updCfg = CONFIG.updates;
 
     const targets = component === "all"
@@ -692,35 +799,65 @@ server.tool(
         continue;
       }
 
-      // Run update from the component's own home directory
-      const levelFlag = level !== undefined ? ` --level ${level}` : "";
-      const cmd = `cd "${productDir}" && "${toolPath}"${levelFlag}`;
+      // Build args
+      const args = level !== undefined ? [`--level`, String(level)] : [];
 
       const env = { ...process.env };
       if (updCfg?.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
       if (updCfg?.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
 
+      const { stdout, stderr, conflicts, exitCode, timedOut } = await runUpdateInteractive(
+        toolPath, args,
+        {
+          cwd: productDir,
+          env,
+          credentials: updCfg?.credentials,
+          conflictResolution,
+          timeoutMs: 300000,
+        }
+      );
+
+      // Read new level
+      let levelAfter = "unknown";
       try {
-        const { stdout } = await execAsync(cmd, { env, timeout: 300000 }); // 5-min timeout
+        const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+        levelAfter = u["update-level"] ?? "unknown";
+      } catch { /* ignore */ }
 
-        // Read new level
-        let levelAfter = "unknown";
-        try {
-          const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
-          levelAfter = u["update-level"] ?? "unknown";
-        } catch { /* ignore */ }
-
-        const upgraded = levelAfter !== levelBefore;
-        results.push(
-          `${upgraded ? "✅" : "⏭️ "} ${c.label}\n` +
-          `   Home: ${productDir}\n` +
-          `   Binary: ${toolPath}\n` +
-          `   Level: ${levelBefore} → ${levelAfter}${level ? ` (target: ${level})` : " (latest)"}\n` +
-          (stdout ? `   Output: ${stdout.trim().split("\n").slice(-3).join(" | ")}` : "")
-        );
-      } catch (err) {
-        results.push(`❌ ${c.label} — update failed:\n   ${err.message.split("\n")[0]}`);
+      if (timedOut) {
+        results.push(`⏱️  ${c.label} — timed out after 5 minutes`);
+        continue;
       }
+
+      const upgraded = levelAfter !== levelBefore;
+      const icon = exitCode !== 0 ? "❌" : upgraded ? "✅" : "⏭️ ";
+
+      let entry = `${icon} ${c.label}\n` +
+        `   Home:   ${productDir}\n` +
+        `   Binary: ${toolPath}\n` +
+        `   Level:  ${levelBefore} → ${levelAfter}${level ? ` (target: ${level})` : " (latest)"}`;
+
+      if (conflicts.length > 0) {
+        entry += `\n\n   ⚠️  ${conflicts.length} conflict(s) — resolved with strategy: "${conflictResolution}"`;
+        entry += "\n   Conflicted files:";
+        conflicts.forEach(f => { entry += `\n     • ${f.file}`; });
+        if (conflictResolution === "keep-local") {
+          entry += "\n   ℹ️  Local versions kept. Review manually if WSO2 fixes affect these files.";
+        } else {
+          entry += "\n   ℹ️  Update versions applied. Back up your config if needed.";
+        }
+      }
+
+      if (exitCode !== 0) {
+        entry += `\n\n   Exit code: ${exitCode}`;
+        const errLines = (stderr || stdout).trim().split("\n").slice(-5).join("\n   ");
+        if (errLines) entry += `\n   ${errLines}`;
+      } else {
+        const lastLines = stdout.trim().split("\n").slice(-3).join(" | ");
+        if (lastLines) entry += `\n   Output: ${lastLines}`;
+      }
+
+      results.push(entry);
     }
 
     return { content: [{ type: "text", text: "Update Results:\n\n" + results.join("\n\n") }] };
@@ -730,12 +867,15 @@ server.tool(
 // ── Tool: revert_updates ──────────────────────────────────────────────────────
 server.tool(
   "revert_updates",
-  "Revert the last WSO2 U2 update applied to a component. Runs from the component's own home directory. The component must be stopped first.",
+  "Revert the last WSO2 U2 update applied to a component. Runs from the component's own home directory. " +
+  "Handles interactive credential and conflict prompts automatically. The component must be stopped first.",
   {
     component: z.enum(["tm", "km", "acp", "gw"])
       .describe("Component to revert"),
+    conflictResolution: z.enum(["keep-local", "use-update"]).default("keep-local")
+      .describe("How to resolve any conflicts during revert: 'keep-local' (default) or 'use-update'"),
   },
-  async ({ component }) => {
+  async ({ component, conflictResolution }) => {
     const updCfg = CONFIG.updates;
     const c = CONFIG.components[component];
     const productDir = `${CONFIG.baseDir}/${c.dir}`;
@@ -774,31 +914,39 @@ server.tool(
     if (updCfg?.credentials?.username) env.WSO2_UPDATES_USERNAME = updCfg.credentials.username;
     if (updCfg?.credentials?.password) env.WSO2_UPDATES_PASSWORD = updCfg.credentials.password;
 
-    try {
-      const { stdout } = await execAsync(
-        `cd "${productDir}" && "${toolPath}" revert`,
-        { env, timeout: 120000 }
-      );
+    const { stdout, stderr, conflicts, exitCode, timedOut } = await runUpdateInteractive(
+      toolPath, ["revert"],
+      { cwd: productDir, env, credentials: updCfg?.credentials, conflictResolution, timeoutMs: 120000 }
+    );
 
-      let levelAfter = "unknown";
-      try {
-        const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
-        levelAfter = u["update-level"] ?? "unknown";
-      } catch { /* ignore */ }
-
-      return {
-        content: [{
-          type: "text",
-          text: `✅ ${c.label} reverted successfully.\n` +
-                `   Home: ${productDir}\n` +
-                `   Binary: ${toolPath}\n` +
-                `   Level: ${levelBefore} → ${levelAfter}\n` +
-                (stdout ? `   Output: ${stdout.trim()}` : ""),
-        }],
-      };
-    } catch (err) {
-      return { content: [{ type: "text", text: `❌ Revert failed:\n${err.message}` }] };
+    if (timedOut) {
+      return { content: [{ type: "text", text: `⏱️  Revert timed out after 2 minutes.` }] };
     }
+
+    let levelAfter = "unknown";
+    try {
+      const u = JSON.parse(readFileSync(`${productDir}/updates/config.json`, "utf8"));
+      levelAfter = u["update-level"] ?? "unknown";
+    } catch { /* ignore */ }
+
+    let text = `${exitCode === 0 ? "✅" : "❌"} ${c.label} revert ${exitCode === 0 ? "succeeded" : "failed"}.\n` +
+      `   Home:   ${productDir}\n` +
+      `   Binary: ${toolPath}\n` +
+      `   Level:  ${levelBefore} → ${levelAfter}`;
+
+    if (conflicts.length > 0) {
+      text += `\n\n   ⚠️  ${conflicts.length} conflict(s) — resolved with strategy: "${conflictResolution}"`;
+      conflicts.forEach(f => { text += `\n     • ${f.file}`; });
+    }
+
+    if (exitCode !== 0) {
+      const errLines = (stderr || stdout).trim().split("\n").slice(-5).join("\n   ");
+      text += `\n\n   Exit code: ${exitCode}\n   ${errLines}`;
+    } else if (stdout.trim()) {
+      text += `\n   Output: ${stdout.trim().split("\n").slice(-3).join(" | ")}`;
+    }
+
+    return { content: [{ type: "text", text }] };
   }
 );
 
