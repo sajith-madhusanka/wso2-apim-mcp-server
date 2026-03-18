@@ -133,8 +133,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 
 | Tool | Description |
 |------|-------------|
-| `start_component` | Start `tm`, `km`, `acp`, or `gw` (clears stale metadata automatically, polls log every 2s) |
-| `stop_component` | Stop `tm`, `km`, `acp`, or `gw` by PID |
+| `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
+| `start_all` | Start all 4 components in correct order (TM → KM → ACP → GW), halts on first failure |
+| `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
+| `stop_all` | Stop all 4 components in correct order (GW → ACP → KM → TM) |
 | `check_status` | Live status of all 4 components + portal URLs |
 | `view_logs` | Tail log lines for any component (supports `errors_only` filter) |
 | `setup_databases` | Create MySQL databases, users, and run init scripts |
@@ -157,6 +159,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```
 "Start the WSO2 Traffic Manager"
 "Start the Key Manager"
+"Start all APIM components"
+"Stop all APIM components"
 "Check status of all APIM components"
 "Show errors from the ACP logs"
 "Set up the MySQL databases for APIM"
@@ -478,6 +482,12 @@ MIT
 ---
 
 ## Changelog
+
+### v1.2.0 — Graceful Stop + start_all / stop_all
+- `stop_component` now calls the proper shutdown script (`gateway.sh stop` etc.) instead of `kill -9`
+- Polls every 2s (up to 30s) to confirm the process has exited
+- New `stop_all` tool: stops GW → ACP → KM → TM in one command
+- New `start_all` tool: starts TM → KM → ACP → GW, halts on first failure
 
 ### v1.1.0 — Key Manager Node + Rapid Startup Polling
 - New `wso2am-km-4.6.0` node extracted from ACP zip (`bin/key-manager.sh`)
