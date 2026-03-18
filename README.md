@@ -354,3 +354,14 @@ Restart Windsurf. Tools become available in the **Cascade** AI panel.
 ## License
 
 MIT
+
+---
+
+## Changelog
+
+### Key Manager Node Added
+- New `wso2am-km-4.6.0` node extracted from ACP zip using `bin/key-manager.sh`
+- Port offset **3** → Management HTTPS: **9446**
+- ACP and Gateway now point `[apim.key_manager]` to `https://localhost:9446/services/`
+- KM subscribes to ACP event hub for key management events (`tcp://localhost:5672`)
+- **Updated start order: TM → KM → ACP → GW**

@@ -23,6 +23,15 @@
     "password": "admin"
   },
   "components": {
+    "km": {
+      "label": "Key Manager",
+      "dir": "wso2am-km-4.6.0",
+      "script": "bin/key-manager.sh",
+      "offset": 3,
+      "mgtPort": 9446,
+      "logFile": "repository/logs/wso2carbon.log",
+      "pidFile": "wso2carbon.pid"
+    },
     "tm": {
       "label": "Traffic Manager",
       "dir": "wso2am-tm-4.6.0",

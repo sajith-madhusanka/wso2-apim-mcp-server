@@ -76,7 +76,7 @@ const server = new McpServer({
 server.tool(
   "start_component",
   "Start a WSO2 APIM 4.6.0 component (tm | acp | gw). Start order: tm → acp → gw.",
-  { component: z.enum(["tm", "acp", "gw"]).describe("Component to start: tm, acp, or gw") },
+  { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to start: km, tm, acp, or gw") },
   async ({ component }) => {
     const c = CONFIG.components[component];
     if (isRunning(component)) {
@@ -106,7 +106,7 @@ server.tool(
 server.tool(
   "stop_component",
   "Stop a WSO2 APIM 4.6.0 component (tm | acp | gw).",
-  { component: z.enum(["tm", "acp", "gw"]).describe("Component to stop") },
+  { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
     const pidFile = componentPath(component, c.pidFile);
@@ -160,7 +160,7 @@ server.tool(
   "view_logs",
   "View recent log lines for a WSO2 APIM 4.6.0 component.",
   {
-    component: z.enum(["tm", "acp", "gw"]).describe("Component whose logs to view"),
+    component: z.enum(["km", "tm", "acp", "gw"]).describe("Component whose logs to view"),
     lines:     z.number().min(10).max(500).default(50).describe("Number of lines to show (default 50)"),
     errors_only: z.boolean().default(false).describe("Show only ERROR/FATAL lines"),
   },
@@ -254,6 +254,7 @@ ${"═".repeat(55)}
 🧩 Components & Ports:
    Component           Dir                        Offset  Mgt HTTPS
    ─────────────────────────────────────────────────────────────────
+   Key Manager         wso2am-km-4.6.0               3     9446
    Traffic Manager     wso2am-tm-4.6.0               2     9445
    API Control Plane   wso2am-acp-4.6.0              0     9443
    Universal Gateway   wso2am-universal-gw-4.6.0     1     9444 (API: 8244/8281)
@@ -267,15 +268,18 @@ ${"═".repeat(55)}
    Publisher  https://localhost:9443/publisher
    DevPortal  https://localhost:9443/devportal
    Admin      https://localhost:9443/admin
-   Carbon     https://localhost:9443/carbon
    Credentials: admin / admin
 
 🔗 Gateway API Endpoints:
    HTTPS  https://localhost:8244/{context}/{version}
    HTTP   http://localhost:8281/{context}/{version}
 
-▶️  Start Order:  TM → ACP → GW
-⏹️  Stop Order:   GW → ACP → TM
+🔑 Key Manager (KM):
+   Service URL  https://localhost:9446/services/
+   Used by ACP and Gateway for token validation/generation
+
+▶️  Start Order:  TM → KM → ACP → GW
+⏹️  Stop Order:   GW → ACP → KM → TM
 
 ⚠️  Known Issues & Fixes:
    1. Space in directory path breaks bash sessions
@@ -303,6 +307,17 @@ server.resource(
       text: JSON.stringify(CONFIG, null, 2),
     }],
   })
+);
+
+server.resource(
+  "deployment-toml-km",
+  "apim://toml/km",
+  "Key Manager deployment.toml template",
+  async () => {
+    const path = `${CONFIG.baseDir}/${CONFIG.components.km.dir}/repository/conf/deployment.toml`;
+    const text = existsSync(path) ? readFileSync(path, "utf8") : "(file not found)";
+    return { contents: [{ uri: "apim://toml/km", mimeType: "text/plain", text }] };
+  }
 );
 
 server.resource(
