@@ -1,5 +1,8 @@
 # WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
 
+> **Branch:** `cp-tm-gw` — **3-node topology** (Control Plane + Traffic Manager + Gateway)
+> For the 4-node setup with a separate Key Manager, see branch [`cp-tm-gw-km`](../../tree/cp-tm-gw-km).
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** (Traffic Manager, API Control Plane, Universal Gateway) with MySQL.
 
 Use it with [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/about-copilot-cli) or any MCP-compatible client (Claude Desktop, VS Code, etc.).
