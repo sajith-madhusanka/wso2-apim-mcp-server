@@ -90,15 +90,49 @@ server.tool(
     const script = componentPath(component, c.script);
     await execAsync(`"${script}" start`);
 
-    return {
-      content: [{
-        type: "text",
-        text: `🚀 ${c.label} start command issued.\n` +
-              `Management port: ${c.mgtPort}\n` +
-              `Log: ${componentPath(component, c.logFile)}\n` +
-              `Tip: use check_status or view_logs to monitor startup.`,
-      }],
-    };
+    // Rapid-poll the log every 2s (up to 90s) for startup signal
+    const logFile = componentPath(component, c.logFile);
+    const pollResult = await new Promise((resolve) => {
+      let attempts = 0;
+      const maxAttempts = 45;
+      const interval = setInterval(() => {
+        attempts++;
+        try {
+          const log = readFileSync(logFile, "utf8");
+          if (log.includes("Mgt Console URL")) {
+            clearInterval(interval);
+            const match = log.match(/Mgt Console URL\s*:\s*(\S+)/);
+            resolve({ started: true, url: match ? match[1] : `https://localhost:${c.mgtPort}/carbon/`, elapsed: attempts * 2 });
+          } else {
+            const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
+            if (attempts >= maxAttempts) {
+              clearInterval(interval);
+              resolve({ started: false, error: errLine || "Timed out after 90s", elapsed: attempts * 2 });
+            }
+          }
+        } catch { /* log not yet written */ }
+      }, 2000);
+    });
+
+    if (pollResult.started) {
+      return {
+        content: [{
+          type: "text",
+          text: `✅ ${c.label} started in ~${pollResult.elapsed}s\n` +
+                `Management URL: ${pollResult.url}\n` +
+                `Credentials: admin / admin`,
+        }],
+      };
+    } else {
+      return {
+        content: [{
+          type: "text",
+          text: `⚠️ ${c.label} did not confirm startup within 90s.\n` +
+                `Last error: ${pollResult.error}\n` +
+                `Check logs: ${logFile}`,
+        }],
+      };
+    }
   }
 );
 
