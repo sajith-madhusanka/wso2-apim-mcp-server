@@ -244,7 +244,9 @@ server.tool(
 // ── Tool: stop_component ─────────────────────────────────────────────────────
 server.tool(
   "stop_component",
-  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). Stop order: GW → ACP → KM → TM.",
+  "Gracefully stop a WSO2 APIM 4.6.0 component using its shutdown script (tm | km | acp | gw). " +
+  "After issuing the stop command, polls the log every 2s for 'Halting JVM' to confirm clean shutdown. " +
+  "Stop order: GW → ACP → KM → TM.",
   { component: z.enum(["km", "tm", "acp", "gw"]).describe("Component to stop") },
   async ({ component }) => {
     const c = CONFIG.components[component];
@@ -253,38 +255,78 @@ server.tool(
       return { content: [{ type: "text", text: `⚠️  ${c.label} is not running.` }] };
     }
 
-    const script = componentPath(component, c.script);
+    const script  = componentPath(component, c.script);
+    const logFile = componentPath(component, c.logFile);
+
     try {
       await execAsync(`"${script}" stop`);
-
-      // Poll every 2s (up to 30s) to confirm the process has exited
-      const stopped = await new Promise((resolve) => {
-        let attempts = 0;
-        const iv = setInterval(() => {
-          attempts++;
-          if (!isRunning(component)) { clearInterval(iv); resolve(true); }
-          else if (attempts >= 15) { clearInterval(iv); resolve(false); }
-        }, 2000);
-      });
-
-      return {
-        content: [{
-          type: "text",
-          text: stopped
-            ? `🛑 ${c.label} stopped successfully.`
-            : `⚠️  ${c.label} stop command issued but process may still be running. Check with check_status.`,
-        }],
-      };
     } catch (err) {
       return { content: [{ type: "text", text: `❌ Failed to stop ${c.label}:\n${err.message}` }] };
     }
+
+    // Poll the log every 2s (up to 60s) for "Halting JVM", also confirm process exit
+    const result = await new Promise((resolve) => {
+      let attempts = 0;
+      const MAX = 30; // 30 × 2s = 60s
+      let lastLogSize = 0;
+      const logLines = [];
+
+      const iv = setInterval(() => {
+        attempts++;
+
+        // Collect any new log lines
+        try {
+          const content = readFileSync(logFile, "utf8");
+          if (content.length > lastLogSize) {
+            const newText = content.slice(lastLogSize);
+            lastLogSize = content.length;
+            newText.split("\n").filter(Boolean).forEach(l => logLines.push(l));
+          }
+          if (logLines.some(l => l.includes("Halting JVM"))) {
+            clearInterval(iv);
+            return resolve({ stopped: true, how: "log", elapsed: attempts * 2, logLines });
+          }
+        } catch { /* log not yet readable */ }
+
+        // Also check process is gone (belt-and-suspenders)
+        if (!isRunning(component)) {
+          clearInterval(iv);
+          return resolve({ stopped: true, how: "process", elapsed: attempts * 2, logLines });
+        }
+
+        if (attempts >= MAX) {
+          clearInterval(iv);
+          resolve({ stopped: false, elapsed: MAX * 2, logLines });
+        }
+      }, 2000);
+    });
+
+    const recentLines = result.logLines.slice(-6).join("\n");
+    if (result.stopped) {
+      const howMsg = result.how === "log"
+        ? `✅ "Halting JVM" confirmed in log after ${result.elapsed}s`
+        : `✅ Process exited after ${result.elapsed}s (log confirmation pending)`;
+      return {
+        content: [{
+          type: "text",
+          text: `🛑 ${c.label} stopped.\n${howMsg}\n\nLast log lines:\n${recentLines || "(none)"}`,
+        }],
+      };
+    }
+    return {
+      content: [{
+        type: "text",
+        text: `⚠️  ${c.label} stop command issued but "Halting JVM" not seen after ${result.elapsed}s.\nCheck with check_status or view_logs.\n\nLast log lines:\n${recentLines || "(none)"}`,
+      }],
+    };
   }
 );
 
 // ── Tool: stop_all ───────────────────────────────────────────────────────────
 server.tool(
   "stop_all",
-  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → KM → TM.",
+  "Gracefully stop all WSO2 APIM 4.6.0 components in the correct order: GW → ACP → KM → TM. " +
+  "After each stop command, polls the log every 2s for 'Halting JVM' to confirm clean shutdown.",
   {},
   async () => {
     const stopOrder = ["gw", "acp", "km", "tm"];
@@ -296,22 +338,59 @@ server.tool(
         results.push(`⚪ ${c.label} — already stopped`);
         continue;
       }
+
+      const script  = componentPath(component, c.script);
+      const logFile = componentPath(component, c.logFile);
+
       try {
-        const script = componentPath(component, c.script);
         await execAsync(`"${script}" stop`);
-        const stopped = await new Promise((resolve) => {
-          let attempts = 0;
-          const iv = setInterval(() => {
-            attempts++;
-            if (!isRunning(component)) { clearInterval(iv); resolve(true); }
-            else if (attempts >= 15) { clearInterval(iv); resolve(false); }
-          }, 2000);
-        });
-        results.push(stopped
-          ? `🛑 ${c.label} — stopped`
-          : `⚠️  ${c.label} — stop issued, may still be running`);
       } catch (err) {
-        results.push(`❌ ${c.label} — error: ${err.message}`);
+        results.push(`❌ ${c.label} — error issuing stop: ${err.message.split("\n")[0]}`);
+        continue;
+      }
+
+      // Poll log for "Halting JVM" (up to 60s)
+      const result = await new Promise((resolve) => {
+        let attempts = 0;
+        const MAX = 30;
+        let lastLogSize = 0;
+        const logLines = [];
+
+        const iv = setInterval(() => {
+          attempts++;
+
+          try {
+            const content = readFileSync(logFile, "utf8");
+            if (content.length > lastLogSize) {
+              const newText = content.slice(lastLogSize);
+              lastLogSize = content.length;
+              newText.split("\n").filter(Boolean).forEach(l => logLines.push(l));
+            }
+            if (logLines.some(l => l.includes("Halting JVM"))) {
+              clearInterval(iv);
+              return resolve({ stopped: true, how: "log", elapsed: attempts * 2 });
+            }
+          } catch { /* log not yet readable */ }
+
+          if (!isRunning(component)) {
+            clearInterval(iv);
+            return resolve({ stopped: true, how: "process", elapsed: attempts * 2 });
+          }
+
+          if (attempts >= MAX) {
+            clearInterval(iv);
+            resolve({ stopped: false, elapsed: MAX * 2 });
+          }
+        }, 2000);
+      });
+
+      if (result.stopped) {
+        const howMsg = result.how === "log"
+          ? `"Halting JVM" in log (${result.elapsed}s)`
+          : `process exited (${result.elapsed}s)`;
+        results.push(`🛑 ${c.label} — stopped [${howMsg}]`);
+      } else {
+        results.push(`⚠️  ${c.label} — stop issued but "Halting JVM" not seen after ${result.elapsed}s`);
       }
     }
 
