@@ -812,16 +812,16 @@ server.tool(
     }
 
     // ── Step 7: Tune MySQL max_connections ──────────────────────────────────
-    // With 4 nodes × 7 connection pools, maxActive totals ~165 (ACP:50, TM:40, GW:30, KM:40).
-    // MySQL default max_connections (151) is not enough. Set to 400.
+    // With 4 nodes × 7 connection pools, maxActive totals 350 (ACP:100, TM:100, GW:50, KM:100).
+    // MySQL default max_connections (151) is not enough. Set to 500.
     let mysqlTuneNote = "";
     try {
-      await execAsync(`${mysqlBase} -e "SET GLOBAL max_connections = 400;" 2>&1`);
-      mysqlTuneNote = "\n  MySQL max_connections → SET GLOBAL to 400 ✅";
-      mysqlTuneNote += "\n  ⚠️  This is session-only. To persist, add max_connections=400 to my.cnf/my.ini under [mysqld].";
+      await execAsync(`${mysqlBase} -e "SET GLOBAL max_connections = 500;" 2>&1`);
+      mysqlTuneNote = "\n  MySQL max_connections → SET GLOBAL to 500 ✅";
+      mysqlTuneNote += "\n  ⚠️  This is session-only. To persist, add max_connections=500 to my.cnf/my.ini under [mysqld].";
     } catch (err) {
       mysqlTuneNote = `\n  ⚠️  Could not set MySQL max_connections: ${err.message.split("\n")[0]}`;
-      mysqlTuneNote += "\n     Add max_connections=400 to my.cnf/my.ini under [mysqld] manually.";
+      mysqlTuneNote += "\n     Add max_connections=500 to my.cnf/my.ini under [mysqld] manually.";
     }
 
     const actionLabel = action === "force_reinit" ? "force re-initialized" : action === "use_existing" ? "set up (skipped existing)" : "created fresh";
@@ -1135,13 +1135,13 @@ driver = "com.mysql.cj.jdbc.Driver"
 
 [database.apim_db.pool_options]
 # Connection pool tuning — ACP (control-plane) amDb
-# Total across all 4 nodes: ~165 connections max; MySQL max_connections must be >= 400
+# Total across all 4 nodes: 350 connections max; MySQL max_connections must be >= 500
 validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 25
-maxIdle = 10
+maxActive = 50
+maxIdle = 15
 minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
@@ -1163,8 +1163,8 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 25
-maxIdle = 10
+maxActive = 50
+maxIdle = 15
 minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
@@ -1295,9 +1295,9 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 20
-maxIdle = 8
-minIdle = 3
+maxActive = 50
+maxIdle = 15
+minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
@@ -1318,9 +1318,9 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 20
-maxIdle = 8
-minIdle = 3
+maxActive = 50
+maxIdle = 15
+minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
@@ -1384,9 +1384,9 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 30
-maxIdle = 8
-minIdle = 3
+maxActive = 50
+maxIdle = 15
+minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
@@ -1505,9 +1505,9 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 20
-maxIdle = 8
-minIdle = 3
+maxActive = 50
+maxIdle = 15
+minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
@@ -1528,9 +1528,9 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 20
-maxIdle = 6
-minIdle = 2
+maxActive = 50
+maxIdle = 15
+minIdle = 5
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
