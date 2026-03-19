@@ -204,6 +204,25 @@ function hasStarted(key) {
   } catch { return false; }
 }
 
+// hasStartedSince: only checks log content written AFTER a given byte offset.
+// Used by start_component to avoid false-positive matches from previous run logs.
+function hasStartedSince(key, offsetBytes) {
+  const logFile = componentPath(key, CONFIG.components[key].logFile);
+  if (!existsSync(logFile)) return { started: false };
+  try {
+    const content = readFileSync(logFile, "utf8");
+    const newContent = content.slice(offsetBytes);
+    if (newContent.includes("Mgt Console URL")) {
+      const match = newContent.match(/Mgt Console URL\s*:\s*(\S+)/);
+      return { started: true, url: match?.[1] };
+    }
+    // Also surface the most recent real error line from new content only
+    const errLine = newContent.split("\n").reverse()
+      .find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
+    return { started: false, error: errLine };
+  } catch { return { started: false }; }
+}
+
 // ─── MCP Server ──────────────────────────────────────────────────────────────
 
 const server = new McpServer({
@@ -226,30 +245,33 @@ server.tool(
     const metaBase = componentPath(component, "repository/resources/conf/.metadata");
     await execAsync(`rm -f "${metaBase}/metadata_config.properties" "${metaBase}/metadata_template.properties"`);
 
-    const script = componentPath(component, c.script);
+    const script  = componentPath(component, c.script);
+    const logFile = componentPath(component, c.logFile);
+
+    // Record log byte offset BEFORE starting — so we only scan NEW content.
+    // This prevents false-positive "Mgt Console URL" matches from previous runs.
+    let logOffsetBefore = 0;
+    try {
+      const { statSync } = await import("fs");
+      logOffsetBefore = statSync(logFile).size;
+    } catch { /* log doesn't exist yet — offset stays 0 */ }
+
     await execAsync(`"${script}" start`);
 
-    // Rapid-poll the log every 2s (up to 90s) for startup signal
-    const logFile = componentPath(component, c.logFile);
+    // Poll new log content every 2s (up to 90s) for startup signal
     const pollResult = await new Promise((resolve) => {
       let attempts = 0;
       const maxAttempts = 45;
       const interval = setInterval(() => {
         attempts++;
-        try {
-          const log = readFileSync(logFile, "utf8");
-          if (log.includes("Mgt Console URL")) {
-            clearInterval(interval);
-            const match = log.match(/Mgt Console URL\s*:\s*(\S+)/);
-            resolve({ started: true, url: match ? match[1] : `https://localhost:${c.mgtPort}/carbon/`, elapsed: attempts * 2 });
-          } else {
-            const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
-            if (attempts >= maxAttempts) {
-              clearInterval(interval);
-              resolve({ started: false, error: errLine || "Timed out after 90s", elapsed: attempts * 2 });
-            }
-          }
-        } catch { /* log not yet written */ }
+        const check = hasStartedSince(component, logOffsetBefore);
+        if (check.started) {
+          clearInterval(interval);
+          resolve({ started: true, url: check.url ?? `https://localhost:${c.mgtPort}/carbon/`, elapsed: attempts * 2 });
+        } else if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          resolve({ started: false, error: check.error ?? "Timed out after 90s", elapsed: attempts * 2 });
+        }
       }, 2000);
     });
 
@@ -453,25 +475,27 @@ server.tool(
         const metaBase = componentPath(component, "repository/resources/conf/.metadata");
         await execAsync(`rm -f "${metaBase}/metadata_config.properties" "${metaBase}/metadata_template.properties"`);
 
-        const script = componentPath(component, c.script);
+        const script  = componentPath(component, c.script);
+        const logFile = componentPath(component, c.logFile);
+
+        // Snapshot log size BEFORE starting to avoid matching old "Mgt Console URL" lines
+        let logOffsetBefore = 0;
+        try { const { statSync } = await import("fs"); logOffsetBefore = statSync(logFile).size; } catch { /* new log */ }
+
         await execAsync(`"${script}" start`);
 
-        const logFile = componentPath(component, c.logFile);
         const pollResult = await new Promise((resolve) => {
           let attempts = 0;
           const iv = setInterval(() => {
             attempts++;
-            try {
-              const log = readFileSync(logFile, "utf8");
-              if (log.includes("Mgt Console URL")) {
-                clearInterval(iv);
-                resolve({ started: true, elapsed: attempts * 2 });
-              } else if (attempts >= 45) {
-                clearInterval(iv);
-                const errLine = log.split("\n").reverse().find(l => l.includes("ERROR") && !l.includes("eventHub") && !l.includes("OutputEvent"));
-                resolve({ started: false, error: errLine || "Timed out after 90s" });
-              }
-            } catch { /* log not yet written */ }
+            const check = hasStartedSince(component, logOffsetBefore);
+            if (check.started) {
+              clearInterval(iv);
+              resolve({ started: true, elapsed: attempts * 2 });
+            } else if (attempts >= 45) {
+              clearInterval(iv);
+              resolve({ started: false, error: check.error ?? "Timed out after 90s" });
+            }
           }, 2000);
         });
 
