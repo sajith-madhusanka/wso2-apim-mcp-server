@@ -163,18 +163,24 @@ function isRunningInfo(key) {
     }
   }
 
-  // 2. Process scan fallback — find a Java process with -Dcarbon.home=<componentDir>
-  try {
-    const { stdout } = execSync(
-      `ps ax -o pid,args | grep "Dcarbon.home=${componentDir}" | grep -v grep`,
-      { encoding: "utf8" }
-    );
-    const line = stdout.trim().split("\n").find(l => l.trim().length > 0);
-    if (line) {
-      const pid = parseInt(line.trim().split(/\s+/)[0]);
-      return { running: true, pid: isNaN(pid) ? null : pid, via: "ps-scan" };
-    }
-  } catch { /* grep exits 1 when nothing matches = not running */ }
+  // 2. Process scan fallback using pgrep -f (reads full untruncated cmdline from
+  //    the kernel — avoids `ps` display-width truncation that silently hides
+  //    late-appearing JVM flags like -Dcarbon.home on macOS/Linux).
+  //    Try multiple patterns so the match works regardless of flag ordering.
+  const patterns = [
+    `Dcarbon.home=${componentDir}`,        // primary: exact carbon.home
+    `XX:HeapDumpPath=${componentDir}`,     // early in arg list — appears before classpath
+    `Dcatalina.base=${componentDir}`,      // also early, Tomcat base path
+  ];
+  for (const pat of patterns) {
+    try {
+      const { stdout } = execSync(`pgrep -f "${pat}"`, { encoding: "utf8" });
+      const pids = stdout.trim().split("\n").map(Number).filter(n => n > 0 && n !== process.pid);
+      if (pids.length > 0) {
+        return { running: true, pid: pids[0], via: "pgrep" };
+      }
+    } catch { /* pgrep exits 1 when nothing matches */ }
+  }
 
   return { running: false, pid: null, via: "none" };
 }
@@ -1022,14 +1028,14 @@ server.tool(
       const diagMarker = `${componentDir}/diagnostics-tool`;
 
       try {
-        // Find all java processes whose args include this component's diagnostics-tool path
+        // Use pgrep -f to search full untruncated cmdline for the diagnostics app marker
         const { stdout } = await execAsync(
-          `ps ax -o pid,args | grep "org.wso2.diagnostics.DiagnosticsApp" | grep -F "${diagMarker}" | grep -v grep`
+          `pgrep -f "${diagMarker}" || true`
         );
 
         const pids = stdout.trim().split("\n")
-          .map(line => parseInt(line.trim().split(/\s+/)[0]))
-          .filter(pid => !isNaN(pid));
+          .map(line => parseInt(line.trim()))
+          .filter(pid => !isNaN(pid) && pid > 0 && pid !== process.pid);
 
         if (pids.length === 0) {
           results.push(`⚪ ${c.label} — diagnostics agent not running`);
