@@ -143,11 +143,45 @@ function componentPath(key, ...parts) {
   return [CONFIG.baseDir, CONFIG.components[key].dir, ...parts].join("/");
 }
 
+// Detect whether a component's JVM is running.
+// Strategy (in order):
+//   1. PID file exists + process.kill(pid, 0) succeeds → running (fast path)
+//   2. No PID file / stale PID → scan `ps` for a Java process whose args
+//      contain "-Dcarbon.home=<componentDir>" (reliable even after restarts
+//      that left the PID file missing or outdated)
+// Returns { running: boolean, pid: number|null, via: string }
+function isRunningInfo(key) {
+  const componentDir = `${CONFIG.baseDir}/${CONFIG.components[key].dir}`;
+  const pidFile = `${componentDir}/${CONFIG.components[key].pidFile}`;
+
+  // 1. PID-file fast path
+  if (existsSync(pidFile)) {
+    const raw = readFileSync(pidFile, "utf8").trim();
+    const pid = Number(raw);
+    if (pid > 0) {
+      try { process.kill(pid, 0); return { running: true, pid, via: "pidfile" }; } catch { /* stale */ }
+    }
+  }
+
+  // 2. Process scan fallback — find a Java process with -Dcarbon.home=<componentDir>
+  try {
+    const { stdout } = execSync(
+      `ps ax -o pid,args | grep "Dcarbon.home=${componentDir}" | grep -v grep`,
+      { encoding: "utf8" }
+    );
+    const line = stdout.trim().split("\n").find(l => l.trim().length > 0);
+    if (line) {
+      const pid = parseInt(line.trim().split(/\s+/)[0]);
+      return { running: true, pid: isNaN(pid) ? null : pid, via: "ps-scan" };
+    }
+  } catch { /* grep exits 1 when nothing matches = not running */ }
+
+  return { running: false, pid: null, via: "none" };
+}
+
+// Convenience boolean wrapper (used throughout existing code)
 function isRunning(key) {
-  const pidFile = componentPath(key, CONFIG.components[key].pidFile);
-  if (!existsSync(pidFile)) return false;
-  const pid = readFileSync(pidFile, "utf8").trim();
-  try { process.kill(Number(pid), 0); return true; } catch { return false; }
+  return isRunningInfo(key).running;
 }
 
 function readLog(key, lines = 50) {
@@ -251,8 +285,9 @@ server.tool(
   async ({ component }) => {
     const c = CONFIG.components[component];
 
-    if (!isRunning(component)) {
-      return { content: [{ type: "text", text: `⚠️  ${c.label} is not running.` }] };
+    const info = isRunningInfo(component);
+    if (!info.running) {
+      return { content: [{ type: "text", text: `⚠️  ${c.label} is not running (checked pidfile + ps-scan).` }] };
     }
 
     const script  = componentPath(component, c.script);
@@ -462,11 +497,12 @@ server.tool(
   {},
   async () => {
     const rows = Object.entries(CONFIG.components).map(([key, c]) => {
-      const running  = isRunning(key);
-      const started  = running && hasStarted(key);
-      const icon     = started ? "✅" : running ? "⏳" : "🔴";
-      const status   = started ? "Running" : running ? "Starting..." : "Stopped";
-      return `${icon} ${c.label.padEnd(22)} port ${c.mgtPort}   ${status}`;
+      const info     = isRunningInfo(key);
+      const started  = info.running && hasStarted(key);
+      const icon     = started ? "✅" : info.running ? "⏳" : "🔴";
+      const status   = started ? "Running" : info.running ? "Starting..." : "Stopped";
+      const pidNote  = info.running ? ` (pid ${info.pid ?? "?"}, via ${info.via})` : "";
+      return `${icon} ${c.label.padEnd(22)} port ${c.mgtPort}   ${status}${pidNote}`;
     });
 
     return {
