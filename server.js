@@ -805,6 +805,19 @@ server.tool(
       initResults.push(`  ⏭️  ${amDb.name} — skipped (existing database)`);
     }
 
+    // ── Step 7: Tune MySQL max_connections ──────────────────────────────────
+    // With 4 nodes × 7 connection pools, maxActive totals ~140.
+    // MySQL default max_connections (151) is not enough. Set to 300.
+    let mysqlTuneNote = "";
+    try {
+      await execAsync(`${mysqlBase} -e "SET GLOBAL max_connections = 300;" 2>&1`);
+      mysqlTuneNote = "\n  MySQL max_connections → SET GLOBAL to 300 ✅";
+      mysqlTuneNote += "\n  ⚠️  This is session-only. To persist, add max_connections=300 to my.cnf/my.ini under [mysqld].";
+    } catch (err) {
+      mysqlTuneNote = `\n  ⚠️  Could not set MySQL max_connections: ${err.message.split("\n")[0]}`;
+      mysqlTuneNote += "\n     Add max_connections=300 to my.cnf/my.ini under [mysqld] manually.";
+    }
+
     const actionLabel = action === "force_reinit" ? "force re-initialized" : action === "use_existing" ? "set up (skipped existing)" : "created fresh";
     return {
       content: [{
@@ -814,7 +827,8 @@ server.tool(
           `  ${amDb.name}     → user: ${amDb.user}\n` +
           `  ${sharedDb.name} → user: ${sharedDb.user}\n` +
           `  Password (both): ${amDb.password}\n\n` +
-          `Init scripts:\n` + initResults.join("\n"),
+          `Init scripts:\n` + initResults.join("\n") +
+          mysqlTuneNote,
       }],
     };
   }
@@ -1114,8 +1128,18 @@ password = "${amDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.apim_db.pool_options]
+# Connection pool tuning — ACP (control-plane) amDb
+# Total across all 4 nodes: ~140 connections max; MySQL max_connections must be >= 300
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 25
+maxIdle = 10
+minIdle = 5
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # ---------------------------------------------------------------------------
 # Database: Shared DB  (User management, Registry)
@@ -1128,10 +1152,18 @@ password = "${sharedDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.shared_db.pool_options]
+# Connection pool tuning — ACP (control-plane) sharedDb
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 25
+maxIdle = 10
+minIdle = 5
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
-# Local H2 (IS-specific per-node data — keep as H2)
 [database.local]
 url = "jdbc:h2:./repository/database/WSO2CARBON_DB;DB_CLOSE_ON_EXIT=FALSE"
 
@@ -1252,8 +1284,17 @@ password = "${amDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.apim_db.pool_options]
+# Connection pool tuning — TM (traffic-manager) amDb
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 20
+maxIdle = 8
+minIdle = 3
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # ---------------------------------------------------------------------------
 # Database: Shared DB  (User management, Registry)
@@ -1266,8 +1307,17 @@ password = "${sharedDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.shared_db.pool_options]
+# Connection pool tuning — TM (traffic-manager) sharedDb
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 20
+maxIdle = 8
+minIdle = 3
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # ---------------------------------------------------------------------------
 # Keystores
@@ -1321,8 +1371,18 @@ password = "${sharedDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.shared_db.pool_options]
+# Connection pool tuning — GW (gateway-worker) sharedDb
+# GW only connects to sharedDb (registry), so maxActive can be lower
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 15
+maxIdle = 5
+minIdle = 2
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # ---------------------------------------------------------------------------
 # Keystores
@@ -1433,8 +1493,17 @@ password = "${amDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.apim_db.pool_options]
+# Connection pool tuning — KM (key-manager) amDb
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 20
+maxIdle = 8
+minIdle = 3
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # ---------------------------------------------------------------------------
 # Database: Shared DB  (User management, Registry)
@@ -1447,8 +1516,17 @@ password = "${sharedDb.password}"
 driver = "com.mysql.cj.jdbc.Driver"
 
 [database.shared_db.pool_options]
+# Connection pool tuning — KM (key-manager) sharedDb
 validationQuery = "SELECT 1"
+testOnBorrow = true
+testWhileIdle = true
 autoReconnect = true
+maxActive = 15
+maxIdle = 5
+minIdle = 2
+maxWait = 60000
+timeBetweenEvictionRunsMillis = 30000
+minEvictableIdleTimeMillis = 180000
 
 # Local H2 (per-node IS data — keep as H2)
 [database.local]
