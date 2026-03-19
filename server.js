@@ -812,16 +812,16 @@ server.tool(
     }
 
     // ── Step 7: Tune MySQL max_connections ──────────────────────────────────
-    // With 4 nodes × 7 connection pools, maxActive totals ~140.
-    // MySQL default max_connections (151) is not enough. Set to 300.
+    // With 4 nodes × 7 connection pools, maxActive totals ~165 (ACP:50, TM:40, GW:30, KM:40).
+    // MySQL default max_connections (151) is not enough. Set to 400.
     let mysqlTuneNote = "";
     try {
-      await execAsync(`${mysqlBase} -e "SET GLOBAL max_connections = 300;" 2>&1`);
-      mysqlTuneNote = "\n  MySQL max_connections → SET GLOBAL to 300 ✅";
-      mysqlTuneNote += "\n  ⚠️  This is session-only. To persist, add max_connections=300 to my.cnf/my.ini under [mysqld].";
+      await execAsync(`${mysqlBase} -e "SET GLOBAL max_connections = 400;" 2>&1`);
+      mysqlTuneNote = "\n  MySQL max_connections → SET GLOBAL to 400 ✅";
+      mysqlTuneNote += "\n  ⚠️  This is session-only. To persist, add max_connections=400 to my.cnf/my.ini under [mysqld].";
     } catch (err) {
       mysqlTuneNote = `\n  ⚠️  Could not set MySQL max_connections: ${err.message.split("\n")[0]}`;
-      mysqlTuneNote += "\n     Add max_connections=300 to my.cnf/my.ini under [mysqld] manually.";
+      mysqlTuneNote += "\n     Add max_connections=400 to my.cnf/my.ini under [mysqld] manually.";
     }
 
     const actionLabel = action === "force_reinit" ? "force re-initialized" : action === "use_existing" ? "set up (skipped existing)" : "created fresh";
@@ -1135,7 +1135,7 @@ driver = "com.mysql.cj.jdbc.Driver"
 
 [database.apim_db.pool_options]
 # Connection pool tuning — ACP (control-plane) amDb
-# Total across all 4 nodes: ~140 connections max; MySQL max_connections must be >= 300
+# Total across all 4 nodes: ~165 connections max; MySQL max_connections must be >= 400
 validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
@@ -1378,14 +1378,15 @@ driver = "com.mysql.cj.jdbc.Driver"
 
 [database.shared_db.pool_options]
 # Connection pool tuning — GW (gateway-worker) sharedDb
-# GW only connects to sharedDb (registry), so maxActive can be lower
+# Registry indexing and token validation tasks demand more connections than
+# the other lightweight nodes — raised from 15 to 30 after pool exhaustion.
 validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 15
-maxIdle = 5
-minIdle = 2
+maxActive = 30
+maxIdle = 8
+minIdle = 3
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
 minEvictableIdleTimeMillis = 180000
@@ -1527,8 +1528,8 @@ validationQuery = "SELECT 1"
 testOnBorrow = true
 testWhileIdle = true
 autoReconnect = true
-maxActive = 15
-maxIdle = 5
+maxActive = 20
+maxIdle = 6
 minIdle = 2
 maxWait = 60000
 timeBetweenEvictionRunsMillis = 30000
