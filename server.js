@@ -1,8 +1,7 @@
 // WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
-// Exposes tools and resources for managing the deployment lifecycle.
-//
-// Configuration is loaded from config.json next to this file.
-// Copy config.example.json → config.json and edit for your environment.
+// Configuration is loaded from a .env file next to this file.
+// Copy .env.example → .env and fill in your values, then source it:
+//   source .env
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -121,21 +120,118 @@ function runUpdateInteractive(toolPath, args, { cwd, env, credentials, conflictR
   });
 }
 
-// ─── Load Configuration ───────────────────────────────────────────────────────
+// ─── Load Configuration from .env ────────────────────────────────────────────
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const configPath = join(__dirname, "config.json");
+const envPath = join(__dirname, ".env");
 
-if (!existsSync(configPath)) {
-  process.stderr.write(
-    `ERROR: config.json not found.\n` +
-    `Copy config.example.json to config.json and edit it for your environment.\n` +
-    `  cp ${join(__dirname, "config.example.json")} ${configPath}\n`
-  );
-  process.exit(1);
+// Load .env file if present — does NOT override already-set process.env vars
+// (so `source .env && node server.js` works alongside MCP client env injection)
+if (existsSync(envPath)) {
+  const envContent = readFileSync(envPath, "utf8");
+  for (const line of envContent.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx < 0) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+    if (key && !(key in process.env)) process.env[key] = val;
+  }
 }
 
-const CONFIG = JSON.parse(readFileSync(configPath, "utf8"));
+// Build CONFIG from environment variables.
+// 'components' is structural/fixed — not user-configurable.
+function buildConfig() {
+  const jdbcVer = process.env.APIM_JDBC_DRIVER_VERSION || "8.0.29";
+  return {
+    baseDir:  process.env.APIM_BASE_DIR || "",
+    mysql: {
+      host:          process.env.APIM_MYSQL_HOST          || "127.0.0.1",
+      port:          parseInt(process.env.APIM_MYSQL_PORT || "3306"),
+      adminUser:     process.env.APIM_MYSQL_ADMIN_USER    || "root",
+      adminPassword: process.env.APIM_MYSQL_ADMIN_PASSWORD || "",
+    },
+    databases: {
+      amDb: {
+        name:     process.env.APIM_AM_DB_NAME     || "APIM_46_AM_DB",
+        user:     process.env.APIM_AM_DB_USER     || "apim46_am_user",
+        password: process.env.APIM_AM_DB_PASSWORD || "",
+      },
+      sharedDb: {
+        name:     process.env.APIM_SHARED_DB_NAME     || "APIM_46_SHARED_DB",
+        user:     process.env.APIM_SHARED_DB_USER     || "apim46_shared_user",
+        password: process.env.APIM_SHARED_DB_PASSWORD || "",
+      },
+    },
+    admin: {
+      username: process.env.APIM_ADMIN_USERNAME || "admin",
+      password: process.env.APIM_ADMIN_PASSWORD || "admin",
+    },
+    updates: {
+      toolPath: process.env.APIM_UPDATE_TOOL_PATH || "",
+      credentials: {
+        username: process.env.APIM_WSO2_USERNAME || "",
+        password: process.env.APIM_WSO2_PASSWORD || "",
+      },
+    },
+    zips: {
+      tm:  process.env.APIM_ZIP_TM  || "",
+      acp: process.env.APIM_ZIP_ACP || "",
+      km:  process.env.APIM_ZIP_KM  || process.env.APIM_ZIP_ACP || "",
+      gw:  process.env.APIM_ZIP_GW  || "",
+    },
+    jdbcDriver: {
+      version:     jdbcVer,
+      downloadUrl: `https://repo1.maven.org/maven2/mysql/mysql-connector-java/${jdbcVer}/mysql-connector-java-${jdbcVer}.jar`,
+    },
+    components: {
+      km: {
+        label: "Key Manager", dir: "wso2am-km-4.6.0",
+        script: "bin/key-manager.sh", offset: 3, mgtPort: 9446,
+        logFile: "repository/logs/wso2carbon.log", pidFile: "wso2carbon.pid",
+      },
+      tm: {
+        label: "Traffic Manager", dir: "wso2am-tm-4.6.0",
+        script: "bin/traffic-manager.sh", offset: 2, mgtPort: 9445,
+        logFile: "repository/logs/wso2carbon.log", pidFile: "wso2carbon.pid",
+      },
+      acp: {
+        label: "API Control Plane", dir: "wso2am-acp-4.6.0",
+        script: "bin/api-cp.sh", offset: 0, mgtPort: 9443,
+        logFile: "repository/logs/wso2carbon.log", pidFile: "wso2carbon.pid",
+      },
+      gw: {
+        label: "Universal Gateway", dir: "wso2am-universal-gw-4.6.0",
+        script: "bin/gateway.sh", offset: 1, mgtPort: 9444,
+        apiHttps: 8244, apiHttp: 8281,
+        logFile: "repository/logs/wso2carbon.log", pidFile: "wso2carbon.pid",
+      },
+    },
+  };
+}
+
+let CONFIG = buildConfig();
+
+// Helper: write a key=value pair to the .env file and update process.env + CONFIG
+function setEnvVar(key, value) {
+  process.env[key] = value;
+
+  let envContent = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+  const lines = envContent.split("\n");
+  const keyPrefix = `${key}=`;
+  const newLine = `${key}=${value}`;
+  const idx = lines.findIndex(l => l.startsWith(keyPrefix) || l.startsWith(`# ${keyPrefix}`));
+  if (idx >= 0) {
+    lines[idx] = newLine;
+  } else {
+    // Append after a blank line
+    if (lines[lines.length - 1] !== "") lines.push("");
+    lines.push(newLine);
+  }
+  writeFileSync(envPath, lines.join("\n"));
+  CONFIG = buildConfig(); // rebuild from updated env
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -843,8 +939,8 @@ server.tool(
 // ── Tool: configure ──────────────────────────────────────────────────────────
 server.tool(
   "configure",
-  "Set or update configuration values in config.json. " +
-  "The AI agent calls this to store environment details (paths, credentials) — users do not need to edit config.json manually. " +
+  "Set or update configuration values in the .env file. " +
+  "The AI agent calls this to store environment details (paths, credentials) — users do not need to edit .env manually during a session. " +
   "Only the fields you provide are updated; everything else is preserved.",
   {
     baseDir:            z.string().optional().describe("Absolute path where APIM component directories live"),
@@ -862,79 +958,77 @@ server.tool(
     zipKm:              z.string().optional().describe("Absolute path to the KM zip file (usually same as ACP)"),
   },
   async (params) => {
-    let rawCfg = {};
-    try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* start fresh */ }
-
-    const set = (obj, path, val) => {
-      const keys = path.split(".");
-      let cur = obj;
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (!cur[keys[i]] || typeof cur[keys[i]] !== "object") cur[keys[i]] = {};
-        cur = cur[keys[i]];
-      }
-      cur[keys[keys.length - 1]] = val;
-    };
-
     const changed = [];
 
-    if (params.baseDir            !== undefined) { set(rawCfg, "baseDir", params.baseDir); changed.push(`baseDir = "${params.baseDir}"`); }
-    if (params.mysqlHost          !== undefined) { set(rawCfg, "mysql.host", params.mysqlHost); changed.push(`mysql.host = "${params.mysqlHost}"`); }
-    if (params.mysqlPort          !== undefined) { set(rawCfg, "mysql.port", params.mysqlPort); changed.push(`mysql.port = ${params.mysqlPort}`); }
-    if (params.mysqlAdminUser     !== undefined) { set(rawCfg, "mysql.adminUser", params.mysqlAdminUser); changed.push(`mysql.adminUser = "${params.mysqlAdminUser}"`); }
-    if (params.mysqlAdminPassword !== undefined) { set(rawCfg, "mysql.adminPassword", params.mysqlAdminPassword); changed.push(`mysql.adminPassword = ****`); }
+    const maybeSet = (envKey, value, label, mask = false) => {
+      if (value === undefined) return;
+      setEnvVar(envKey, String(value));
+      changed.push(`${label} = ${mask ? "****" : JSON.stringify(value)}`);
+    };
 
-    // Database name changes — auto-derive user/password from name (lowercase, replace - with _)
+    maybeSet("APIM_BASE_DIR",             params.baseDir,            "APIM_BASE_DIR");
+    maybeSet("APIM_MYSQL_HOST",           params.mysqlHost,          "APIM_MYSQL_HOST");
+    maybeSet("APIM_MYSQL_PORT",           params.mysqlPort,          "APIM_MYSQL_PORT");
+    maybeSet("APIM_MYSQL_ADMIN_USER",     params.mysqlAdminUser,     "APIM_MYSQL_ADMIN_USER");
+    maybeSet("APIM_MYSQL_ADMIN_PASSWORD", params.mysqlAdminPassword, "APIM_MYSQL_ADMIN_PASSWORD", true);
+    maybeSet("APIM_WSO2_USERNAME",        params.updatesUsername,    "APIM_WSO2_USERNAME");
+    maybeSet("APIM_WSO2_PASSWORD",        params.updatesPassword,    "APIM_WSO2_PASSWORD", true);
+    maybeSet("APIM_ZIP_TM",              params.zipTm,              "APIM_ZIP_TM");
+    maybeSet("APIM_ZIP_GW",              params.zipGw,              "APIM_ZIP_GW");
+
+    if (params.zipAcp !== undefined) {
+      setEnvVar("APIM_ZIP_ACP", params.zipAcp);
+      changed.push(`APIM_ZIP_ACP = ${JSON.stringify(params.zipAcp)}`);
+      if (params.zipKm === undefined) {
+        setEnvVar("APIM_ZIP_KM", params.zipAcp);
+        changed.push(`APIM_ZIP_KM = ${JSON.stringify(params.zipAcp)} (auto from ACP)`);
+      }
+    }
+    if (params.zipKm !== undefined) {
+      setEnvVar("APIM_ZIP_KM", params.zipKm);
+      changed.push(`APIM_ZIP_KM = ${JSON.stringify(params.zipKm)}`);
+    }
+
+    // DB name changes — auto-derive user/password from name
     if (params.amDbName !== undefined) {
       const autoUser = params.amDbName.toLowerCase().replace(/-/g, "_") + "_user";
       const autoPass = params.amDbName.toLowerCase().replace(/-/g, "_") + "_pass";
-      set(rawCfg, "databases.amDb.name", params.amDbName); changed.push(`databases.amDb.name = "${params.amDbName}"`);
-      // Only override user/pass if not already customised
-      if (!rawCfg.databases?.amDb?.user  || rawCfg.databases.amDb.user  === autoUser.replace(params.amDbName.toLowerCase(), "").trim()) {
-        set(rawCfg, "databases.amDb.user", autoUser); changed.push(`databases.amDb.user = "${autoUser}" (auto)`);
+      setEnvVar("APIM_AM_DB_NAME", params.amDbName);
+      changed.push(`APIM_AM_DB_NAME = ${JSON.stringify(params.amDbName)}`);
+      if (!process.env.APIM_AM_DB_USER || process.env.APIM_AM_DB_USER === "apim46_am_user") {
+        setEnvVar("APIM_AM_DB_USER", autoUser);
+        changed.push(`APIM_AM_DB_USER = ${JSON.stringify(autoUser)} (auto)`);
       }
-      if (!rawCfg.databases?.amDb?.password) {
-        set(rawCfg, "databases.amDb.password", autoPass); changed.push(`databases.amDb.password = "${autoPass}" (auto)`);
+      if (!process.env.APIM_AM_DB_PASSWORD) {
+        setEnvVar("APIM_AM_DB_PASSWORD", autoPass);
+        changed.push(`APIM_AM_DB_PASSWORD = **** (auto)`);
       }
     }
     if (params.sharedDbName !== undefined) {
       const autoUser = params.sharedDbName.toLowerCase().replace(/-/g, "_") + "_user";
       const autoPass = params.sharedDbName.toLowerCase().replace(/-/g, "_") + "_pass";
-      set(rawCfg, "databases.sharedDb.name", params.sharedDbName); changed.push(`databases.sharedDb.name = "${params.sharedDbName}"`);
-      if (!rawCfg.databases?.sharedDb?.user) {
-        set(rawCfg, "databases.sharedDb.user", autoUser); changed.push(`databases.sharedDb.user = "${autoUser}" (auto)`);
+      setEnvVar("APIM_SHARED_DB_NAME", params.sharedDbName);
+      changed.push(`APIM_SHARED_DB_NAME = ${JSON.stringify(params.sharedDbName)}`);
+      if (!process.env.APIM_SHARED_DB_USER || process.env.APIM_SHARED_DB_USER === "apim46_shared_user") {
+        setEnvVar("APIM_SHARED_DB_USER", autoUser);
+        changed.push(`APIM_SHARED_DB_USER = ${JSON.stringify(autoUser)} (auto)`);
       }
-      if (!rawCfg.databases?.sharedDb?.password) {
-        set(rawCfg, "databases.sharedDb.password", autoPass); changed.push(`databases.sharedDb.password = "${autoPass}" (auto)`);
-      }
-    }
-
-    if (params.updatesUsername    !== undefined) { set(rawCfg, "updates.credentials.username", params.updatesUsername); changed.push(`updates.credentials.username = "${params.updatesUsername}"`); }
-    if (params.updatesPassword    !== undefined) { set(rawCfg, "updates.credentials.password", params.updatesPassword); changed.push(`updates.credentials.password = ****`); }
-    if (params.zipTm              !== undefined) { set(rawCfg, "zips.tm", params.zipTm); changed.push(`zips.tm = "${params.zipTm}"`); }
-    if (params.zipAcp             !== undefined) {
-      set(rawCfg, "zips.acp", params.zipAcp); changed.push(`zips.acp = "${params.zipAcp}"`);
-      // KM always uses the ACP archive — auto-set unless caller explicitly provided zipKm
-      if (params.zipKm === undefined && params.zipAcp) {
-        set(rawCfg, "zips.km", params.zipAcp); changed.push(`zips.km = "${params.zipAcp}" (auto from ACP)`);
+      if (!process.env.APIM_SHARED_DB_PASSWORD) {
+        setEnvVar("APIM_SHARED_DB_PASSWORD", autoPass);
+        changed.push(`APIM_SHARED_DB_PASSWORD = **** (auto)`);
       }
     }
-    if (params.zipGw              !== undefined) { set(rawCfg, "zips.gw", params.zipGw); changed.push(`zips.gw = "${params.zipGw}"`); }
-    if (params.zipKm              !== undefined) { set(rawCfg, "zips.km", params.zipKm); changed.push(`zips.km = "${params.zipKm}"`); }
 
     if (changed.length === 0) {
       return { content: [{ type: "text", text: "⚠️  No fields provided — nothing updated." }] };
     }
 
-    writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
-
-    // Apply to live CONFIG so the session picks up changes immediately
-    Object.assign(CONFIG, JSON.parse(readFileSync(configPath, "utf8")));
-
     return {
       content: [{
         type: "text",
-        text: `✅ config.json updated (${changed.length} field${changed.length > 1 ? "s" : ""}):\n` +
-              changed.map(c => `   • ${c}`).join("\n"),
+        text: `✅ .env updated (${changed.length} field${changed.length > 1 ? "s" : ""}):\n` +
+              changed.map(c => `   • ${c}`).join("\n") +
+              `\n\nTo reload in a new shell session: source .env`,
       }],
     };
   }
@@ -970,7 +1064,7 @@ ${"═".repeat(55)}
 🗄️  Databases (MySQL @ ${CONFIG.mysql?.host || "localhost"}:${CONFIG.mysql?.port || 3306}):
    ${CONFIG.databases?.amDb?.name || "APIM_46_AM_DB"}     → ${CONFIG.databases?.amDb?.user || "apim46_am_user"} / ${CONFIG.databases?.amDb?.password || "APIM46_DB@123"}
    ${CONFIG.databases?.sharedDb?.name || "APIM_46_SHARED_DB"} → ${CONFIG.databases?.sharedDb?.user || "apim46_shared_user"} / ${CONFIG.databases?.sharedDb?.password || "APIM46_DB@123"}
-   MySQL admin → ${CONFIG.mysql?.adminUser || "root"} / ${CONFIG.mysql?.adminPassword || "Admin@123"}
+   MySQL admin → ${CONFIG.mysql?.adminUser || "root"} / ${CONFIG.mysql?.adminPassword || "(not set)"}
 
 🔗 Portal URLs (ACP):
    Publisher  https://localhost:9443/publisher
@@ -1079,7 +1173,7 @@ server.tool(
 // Only deployment.toml is touched — no other files are modified.
 server.tool(
   "apply_config",
-  "Generate and write deployment.toml for each WSO2 APIM component based on current config.json values " +
+  "Generate and write deployment.toml for each WSO2 APIM component based on current .env values " +
   "(MySQL host/port, database names/users/passwords, admin credentials). " +
   "Only deployment.toml is written — no other files are touched. " +
   "Run this after configure and extract_components, before start_component. " +
@@ -1629,7 +1723,7 @@ password = "\${admin.password}"
 // ── Tool: extract_components ─────────────────────────────────────────────────
 server.tool(
   "extract_components",
-  "Extract WSO2 APIM component ZIP files into the base directory. ZIP paths must be set in config.json under 'zips'. KM is extracted from the ACP zip and renamed automatically.",
+  "Extract WSO2 APIM component ZIP files into the base directory. ZIP paths must be set in .env (APIM_ZIP_* variables). KM is extracted from the ACP zip and renamed automatically.",
   {
     component: z.enum(["all", "tm", "km", "acp", "gw"]).default("all")
       .describe("Which component to extract, or 'all' for all components"),
@@ -1639,7 +1733,7 @@ server.tool(
   async ({ component, overwrite }) => {
     const zips = CONFIG.zips;
     if (!zips) {
-      return { content: [{ type: "text", text: "❌ 'zips' section missing from config.json. Add zip paths for each component." }] };
+      return { content: [{ type: "text", text: "❌ 'zips' section missing from .env. Set APIM_ZIP_TM, APIM_ZIP_ACP, APIM_ZIP_GW environment variables." }] };
     }
 
     const targets = component === "all"
@@ -1668,7 +1762,7 @@ server.tool(
         const searchDirs = [
           zipPath ? dirname(zipPath) : null,
           CONFIG.baseDir,
-          dirname(configPath),
+          __dirname,
         ].filter(Boolean);
 
         let found = null;
@@ -2110,16 +2204,9 @@ server.tool(
       }
     }
 
-    // Save fallback toolPath to config.json (used if per-component binary is missing)
+    // Save fallback toolPath to .env (used if per-component binary is missing)
     if (lastBinary) {
-      const configPath = new URL("./config.json", import.meta.url).pathname;
-      let rawCfg = {};
-      try { rawCfg = JSON.parse(readFileSync(configPath, "utf8")); } catch { /* new config */ }
-      if (!rawCfg.updates) rawCfg.updates = {};
-      rawCfg.updates.toolPath = lastBinary;
-      writeFileSync(configPath, JSON.stringify(rawCfg, null, 2));
-      if (!CONFIG.updates) CONFIG.updates = {};
-      CONFIG.updates.toolPath = lastBinary;
+      setEnvVar("APIM_UPDATE_TOOL_PATH", lastBinary);
     }
 
     const summary = results.join("\n");
@@ -2130,8 +2217,8 @@ server.tool(
               (lastBinary
                 ? `Each component now has its own binary in its bin/ directory.\n` +
                   `apply_updates and revert_updates will use the per-component binary automatically.\n\n` +
-                  `Next: set updates.credentials in config.json:\n` +
-                  `  "credentials": { "username": "your@email", "password": "..." }`
+                  `Next: set APIM_WSO2_USERNAME and APIM_WSO2_PASSWORD in .env:\n` +
+                  `  APIM_WSO2_USERNAME=your@email.com\n  APIM_WSO2_PASSWORD=yourpassword`
                 : `⚠️  No binaries were set up. Check that components are extracted first.`),
       }],
     };
