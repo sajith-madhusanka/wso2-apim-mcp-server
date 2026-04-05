@@ -1,6 +1,6 @@
-# WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
+# WSO2 APIM 4.6.0 MCP Server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** — extraction, database setup, startup, shutdown, log viewing, and U2 updates — all through natural language prompts.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that manages the full lifecycle of a **WSO2 API Manager 4.6.0 distributed deployment** — extraction, database setup, configuration, startup, shutdown, log viewing, and U2 updates — all through natural language with your AI assistant.
 
 ## Choose Your Topology
 
@@ -9,7 +9,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that m
 | [`cp-tm-gw`](../../tree/cp-tm-gw) | 3 | Control Plane + Traffic Manager + Gateway |
 | [`cp-tm-gw-km`](../../tree/cp-tm-gw-km) | 4 | + separate Key Manager node (recommended for production) |
 
-> `main` tracks the latest changes. Pick the branch that matches your deployment.
+> **Start here:** Pick the branch that matches your deployment, then follow the setup below.
 
 ---
 
@@ -40,41 +40,67 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that m
 ```
 
 **Start order:** TM → KM → ACP → GW  
-**Portal URLs (ACP):** `https://localhost:9443/publisher` | `/devportal` | `/admin`
+**Portal URLs:** `https://localhost:9443/publisher` · `/devportal` · `/admin`
 
 ---
 
 ## Prerequisites
 
-- **Node.js 18+** (tested on v20)
-- **MySQL 8.x** running locally
-- WSO2 APIM 4.6.0 ZIP files (you only need to know where they are — the agent handles the rest):
-  - `wso2am-tm-4.6.0.x.zip`
-  - `wso2am-acp-4.6.0.x.zip` (also used for the KM node)
-  - `wso2am-universal-gw-4.6.0.zip`
+| Requirement | Details |
+|-------------|---------|
+| **Node.js** | v18 or later |
+| **MySQL** | 8.x running locally |
+| **APIM ZIPs** | Downloaded from [wso2.com/api-manager](https://wso2.com/api-manager/) → Enterprise → 4.6.0 |
+| **WSO2 account** | Only needed for U2 updates — [wso2.com/user](https://wso2.com/user) |
+
+ZIP files needed:
+- `wso2am-tm-4.6.0.x.zip` (Traffic Manager)
+- `wso2am-acp-4.6.0.x.zip` (Control Plane — also used for Key Manager)
+- `wso2am-universal-gw-4.6.0.zip` (Gateway)
 
 ---
 
 ## Setup
 
-### 1. Clone and install
+### 1. Clone and install dependencies
 
 ```bash
 git clone https://github.com/sajith-madhusanka/wso2-apim-mcp-server.git
 cd wso2-apim-mcp-server
 npm install
-cp config.example.json config.json
 ```
 
-> `config.json` is git-ignored and managed by the AI agent — you do not need to edit it manually.
+### 2. Configure environment variables
 
-### 2. Register with your AI client
+```bash
+cp .env.example .env
+```
 
-Choose your client below, then proceed to **Getting Started**.
+Edit `.env` with your values:
 
----
+```bash
+# Minimum required fields
+APIM_BASE_DIR=/path/to/your/deployment     # where components will be extracted
+APIM_MYSQL_ADMIN_PASSWORD=yourpassword     # MySQL root/admin password
+APIM_ZIP_TM=/path/to/wso2am-tm-4.6.0.x.zip
+APIM_ZIP_ACP=/path/to/wso2am-acp-4.6.0.x.zip
+APIM_ZIP_GW=/path/to/wso2am-universal-gw-4.6.0.zip
+```
 
-#### GitHub Copilot CLI
+Load the environment variables before starting your AI client:
+
+```bash
+source .env
+```
+
+> **One-time setup:** Run `source .env` in any terminal session before launching your AI assistant. All credentials and paths are read from these environment variables — no manual configuration is needed inside the AI chat.
+
+### 3. Register the MCP server with your AI client
+
+Pick your client:
+
+<details>
+<summary><strong>GitHub Copilot CLI</strong></summary>
 
 Add to `~/.copilot/mcp-config.json`:
 
@@ -92,14 +118,13 @@ Add to `~/.copilot/mcp-config.json`:
 
 Verify with `/mcp` in the CLI.
 
----
+</details>
 
-#### Claude Desktop
+<details>
+<summary><strong>Claude Desktop</strong></summary>
 
-Add to your Claude Desktop config:
-
-| OS | Path |
-|----|------|
+| OS | Config file |
+|----|-------------|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | Linux | `~/.config/claude/claude_desktop_config.json` |
@@ -117,20 +142,20 @@ Add to your Claude Desktop config:
 
 Restart Claude Desktop. A 🔌 icon confirms the server is connected.
 
----
+</details>
 
-#### Claude CLI (Claude Code)
+<details>
+<summary><strong>Claude CLI (Claude Code)</strong></summary>
 
 ```bash
 claude mcp add wso2-apim node /absolute/path/to/wso2-apim-mcp-server/server.js
 claude mcp list   # verify
 ```
 
-Or add to `~/.claude.json` / `.mcp.json` (project scope) manually using the same format.
+</details>
 
----
-
-#### VS Code (GitHub Copilot Agent mode)
+<details>
+<summary><strong>VS Code (GitHub Copilot Agent mode)</strong></summary>
 
 Open Command Palette → `Preferences: Open User Settings (JSON)` and add:
 
@@ -148,55 +173,68 @@ Open Command Palette → `Preferences: Open User Settings (JSON)` and add:
 }
 ```
 
-Or for workspace scope, create `.vscode/mcp.json` in your project root with the same `servers` block.
+For workspace scope, create `.vscode/mcp.json` with the same `servers` block.
 
----
+</details>
 
-#### Other clients (Cursor, Windsurf, Zed, Continue.dev)
+<details>
+<summary><strong>Other clients (Cursor, Windsurf, Zed, Continue.dev)</strong></summary>
 
-All use the same pattern — `command: "node"`, `args: ["/path/to/server.js"]`:
+All use `command: "node"`, `args: ["/path/to/server.js"]`:
 
 | Client | Config file |
 |--------|-------------|
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
-| Zed | `~/.config/zed/settings.json` (key: `context_servers`) |
-| Continue.dev | `~/.continue/config.json` (key: `mcpServers` array) |
+| Zed | `~/.config/zed/settings.json` (`context_servers` key) |
+| Continue.dev | `~/.continue/config.json` (`mcpServers` array) |
 
----
+</details>
 
-## Getting Started
+### 4. Start your first deployment
 
-Once the MCP server is registered, just tell the agent about your environment. The agent will call the `configure` tool to write `config.json` automatically — **no manual file editing needed**.
-
-### First-time setup flow
-
-Tell the agent (one message is enough):
+Open your AI assistant and say:
 
 ```
-"Set up a WSO2 APIM 4.6.0 distributed deployment.
- Base directory: /path/to/my/deployment
- WSO2 account: me@example.com / mypassword
- MySQL root password: MyPass123"
+Set up a WSO2 APIM 4.6.0 distributed deployment
 ```
 
 The agent will:
-1. Call `configure` to save your paths and credentials to `config.json`
-2. Ask you to download the APIM profile ZIPs from [wso2.com/api-manager](https://wso2.com/api-manager/) (Enterprise tab → version 4.6.0 → TM, ACP, GW ZIPs) and place them in your base directory
-3. Call `extract_components` to unzip all components
-4. Call `setup_jdbc_driver` to download and install the MySQL connector
-5. Call `setup_databases` to create databases and run init scripts
-6. Call `apply_config` to write deployment.toml for every node from config.json values
-7. Call `start_all` to start all nodes in the correct order
+1. Extract component ZIPs into your `APIM_BASE_DIR`
+2. Download and install the MySQL JDBC driver
+3. Create databases, users, and run init scripts
+4. Write `deployment.toml` for every node
+5. Start all nodes in the correct order (TM → KM → ACP → GW)
 
-### Subsequent sessions
+---
 
-```
-"Start all APIM components"
-"Check status of all components"
-"Show errors from the ACP logs"
-"Stop all components"
-```
+## Environment Variables Reference
+
+All configuration lives in `.env`. The file is git-ignored — never committed.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APIM_BASE_DIR` | *(required)* | Directory where APIM components are extracted |
+| `APIM_MYSQL_HOST` | `127.0.0.1` | MySQL host |
+| `APIM_MYSQL_PORT` | `3306` | MySQL port |
+| `APIM_MYSQL_ADMIN_USER` | `root` | MySQL admin username |
+| `APIM_MYSQL_ADMIN_PASSWORD` | *(required)* | MySQL admin password |
+| `APIM_AM_DB_NAME` | `APIM_46_AM_DB` | AM database name |
+| `APIM_AM_DB_USER` | `apim46_am_user` | AM database user |
+| `APIM_AM_DB_PASSWORD` | `APIM46_DB@123` | AM database password |
+| `APIM_SHARED_DB_NAME` | `APIM_46_SHARED_DB` | Shared database name |
+| `APIM_SHARED_DB_USER` | `apim46_shared_user` | Shared database user |
+| `APIM_SHARED_DB_PASSWORD` | `APIM46_DB@123` | Shared database password |
+| `APIM_ADMIN_USERNAME` | `admin` | APIM console username |
+| `APIM_ADMIN_PASSWORD` | `admin` | APIM console password |
+| `APIM_WSO2_USERNAME` | *(for U2 only)* | WSO2 account email |
+| `APIM_WSO2_PASSWORD` | *(for U2 only)* | WSO2 account password |
+| `APIM_ZIP_TM` | *(required)* | Path to TM ZIP archive |
+| `APIM_ZIP_ACP` | *(required)* | Path to ACP ZIP archive |
+| `APIM_ZIP_GW` | *(required)* | Path to GW ZIP archive |
+| `APIM_JDBC_DRIVER_VERSION` | `8.0.29` | MySQL JDBC driver version (Maven Central) |
+| `APIM_UPDATE_TOOL_PATH` | *(auto-set)* | Path to wso2update binary — set by `setup_update_tool` |
+| `APIM_ZIP_KM` | *(auto-set)* | KM ZIP path — auto-copied from `APIM_ZIP_ACP` |
 
 ---
 
@@ -204,25 +242,25 @@ The agent will:
 
 | Tool | Description |
 |------|-------------|
-| `configure` | Save environment settings (paths, credentials, DB names) to `config.json` — called by the agent, not the user. Auto-sets `zips.km = zips.acp`. Supports `amDbName`/`sharedDbName` to rename databases. |
-| `apply_config` | Write `deployment.toml` for each component from current config.json values (DB host/port/name/user/password). Only `deployment.toml` is modified. Port offsets are FIXED. |
-| `extract_components` | Extract component ZIPs into `baseDir` — scans by prefix (e.g. `wso2am-tm-*.zip`) so U2-level suffix is ignored; KM auto-renamed from ACP zip |
-| `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component lib dirs |
-| `setup_databases` | Create MySQL databases, users, and run init scripts. If a database already exists, pauses and asks whether to use existing (`use_existing`), recreate (`force_reinit`), or stop to reconfigure (`reconfigure`) |
-| `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — clears stale metadata, polls log every 2s |
+| `configure` | Update `.env` values during a session — called by the agent, not the user |
+| `apply_config` | Write `deployment.toml` for each component from current env values (DB host/port/name/user/password). Port offsets are FIXED |
+| `extract_components` | Extract component ZIPs into `APIM_BASE_DIR` — scans by prefix so U2-level suffix is ignored; KM auto-renamed from ACP zip |
+| `setup_jdbc_driver` | Download MySQL JDBC driver from Maven Central, copy to all component `lib/` dirs |
+| `setup_databases` | Create MySQL databases, users, and run init scripts. Detects existing databases and asks whether to reuse or recreate |
+| `start_component` | Start one component: `tm`, `km`, `acp`, or `gw` — polls log every 2s for successful startup |
 | `start_all` | Start all components in correct order (TM → KM → ACP → GW), halts on first failure |
-| `stop_component` | Gracefully stop one component using its shutdown script, confirms exit |
-| `stop_all` | Stop all components in correct order (GW → ACP → KM → TM) |
-| `stop_diagnostics` | Stop the runtime diagnostics agent (`org.wso2.diagnostics.DiagnosticsApp`) that auto-starts with each component |
-| `toggle_diagnostics_startup` | Enable or disable auto-start of the diagnostics agent by editing the component startup script — set `action=disable` to prevent it launching on next start |
-| `check_status` | Live status of all components + portal URLs |
-| `view_logs` | Snapshot of recent log lines for any component (supports `errors_only` filter) |
-| `tail_logs` | Open a new terminal window running `tail -f` on a component's log — supports macOS Terminal, Linux (gnome-terminal, konsole, xfce4-terminal, xterm), and Windows PowerShell |
-| `setup_update_tool` | Download the WSO2 U2 binary into each component's `bin/` dir via the bundled `update_tool_setup.sh` |
-| `check_update_level` | Show current U2 level for each component (reads `updates/config.json` — no binary needed) |
-| `apply_updates` | Apply U2 updates per-component; handles credential and conflict prompts automatically |
+| `stop_component` | Gracefully stop one component, polls log for "Halting JVM" confirmation |
+| `stop_all` | Stop all components in reverse order (GW → ACP → KM → TM) |
+| `stop_diagnostics` | Stop the runtime diagnostics agent that auto-starts with each component |
+| `toggle_diagnostics_startup` | Disable or re-enable auto-start of the diagnostics agent in the startup script |
+| `check_status` | Live status of all components — shows PID, detection method, and portal URLs |
+| `view_logs` | Recent log lines for any component — supports `errors_only` filter |
+| `tail_logs` | Open a new terminal window with `tail -f` on a component's log (macOS, Linux, Windows) |
+| `setup_update_tool` | Download the WSO2 U2 binary into each component's `bin/` dir |
+| `check_update_level` | Show current U2 level for each component |
+| `apply_updates` | Apply U2 updates — handles credential prompts and file conflicts automatically |
 | `revert_updates` | Revert the last U2 update on a component |
-| `get_deployment_info` | Full topology, fixed port offsets, credentials, and known issue fixes |
+| `get_deployment_info` | Full topology, port offsets, credentials, and known issue fixes |
 
 ## Available Resources
 
@@ -238,18 +276,17 @@ The agent will:
 
 ## Key Manager Node
 
-The Key Manager is a **dedicated token-validation and key-management plane** that offloads OAuth2/JWT operations from the API Control Plane.
+The Key Manager is a dedicated token-validation plane that offloads OAuth2/JWT operations from the API Control Plane.
 
-| Concern | Details |
-|---------|---------|
+| Detail | Value |
+|--------|-------|
 | **Binary** | Uses the ACP zip (`wso2am-acp-4.6.0.x.zip`) — activated via `bin/key-manager.sh` |
 | **Port** | HTTPS **9446** (offset 3) |
-| **Databases** | `APIM_46_AM_DB` + `APIM_46_SHARED_DB` (same MySQL users as ACP) |
+| **Databases** | `APIM_46_AM_DB` + `APIM_46_SHARED_DB` |
 | **Event hub** | Subscribes to ACP JMS at `tcp://localhost:5672` |
-| **Token validation** | Gateway calls `https://localhost:9446/services/` for every inbound API request |
+| **Token validation** | Gateway calls `https://localhost:9446/services/` for every API request |
 
 ```toml
-# Key Manager deployment.toml highlights
 [server]
 hostname = "localhost"
 server_role = "key-manager"
@@ -265,41 +302,44 @@ event_listening_endpoints = ["tcp://localhost:5672"]
 
 ## WSO2 U2 Updates
 
-WSO2 U2 (Update 2.0) delivers bug fixes and security patches as cumulative update levels. Each level is a superset of all previous levels.
+WSO2 U2 delivers bug fixes and security patches as cumulative update levels.
 
 ### Workflow
 
 ```
-1. "Set up the WSO2 update tool"             → setup_update_tool
-   (downloads binary into each component's bin/ dir — one-time per machine)
-
-2. "What U2 level are my APIM components on?" → check_update_level
-
-3. "Update all APIM components to the latest U2 level"
-   — or —
-   "Update all components to U2 level 20"    → apply_updates (auto-stops each node first)
-
-4. "Start all APIM components"               → start_all
+1. "Set up the WSO2 update tool"                → setup_update_tool
+2. "What U2 level are my components on?"         → check_update_level
+3. "Update all components to the latest level"
+   "Update all components to U2 level 20"       → apply_updates
+4. "Start all APIM components"                   → start_all
 ```
 
-> **Credential prompt:** If the update tool asks for a password, the agent feeds it automatically from `config.json` (set via `configure`).  
-> **Conflicts:** Locally modified files that also changed in the update are auto-resolved. Default strategy is `keep-local` (safe for `deployment.toml`). Pass `conflictResolution: "use-update"` to accept WSO2's version.
+> **Credentials** are read automatically from `APIM_WSO2_USERNAME` / `APIM_WSO2_PASSWORD` in `.env`.  
+> **Conflicts:** Pass `conflictResolution: "keep-local"` (default, safe for `deployment.toml`) or `"use-update"` to accept WSO2's version.
 
-To revert:
-```
-"Revert the last update on the ACP"         → revert_updates
-```
+To revert: `"Revert the last update on the ACP"` → `revert_updates`
 
 ---
 
 ## Database Configuration
 
-Both databases are created with **`CHARACTER SET latin1`** (required by WSO2 APIM — do not use `utf8mb4`).
+Both databases use **`CHARACTER SET latin1`** (required by WSO2 APIM).
 
-| Database | User | Purpose |
-|----------|------|---------|
+| Database | Default User | Purpose |
+|----------|-------------|---------|
 | `APIM_46_AM_DB` | `apim46_am_user` | APIs, Applications, Subscriptions, Throttling |
 | `APIM_46_SHARED_DB` | `apim46_shared_user` | User management, Registry |
+
+**MySQL connection limits:** With 4 nodes × 7 connection pools (`maxActive=50` each), total = 350 connections. Set `max_connections=500` in MySQL:
+
+```sql
+SET GLOBAL max_connections = 500;
+```
+
+To persist across restarts, add to `my.cnf [mysqld]`:
+```ini
+max_connections=500
+```
 
 ---
 
@@ -311,34 +351,33 @@ Both databases are created with **`CHARACTER SET latin1`** (required by WSO2 API
 | `&` in JDBC URL causes XML parse error | Use `?useSSL=false` only; set `autoReconnect` in `[pool_options]` |
 | `create_admin_account` must be `true` on all nodes | Shared DB has no admin until the first node creates it |
 | Stale `.metadata` blocks config regeneration | Delete `repository/resources/conf/.metadata/metadata_*.properties` before restart |
+| `stop_all` reports "already stopped" for running nodes | Fixed: uses `pgrep -f` (kernel-level full cmdline) instead of `ps ax` (truncated display) |
 
 ---
 
 ## Contributing
 
-Contributions are welcome — new tools, bug fixes, better docs.
-
 ### Project Structure
 
 ```
 wso2-apim-mcp-server/
-├── server.js            # All MCP tools and resources (single-file server)
-├── config.json          # Your local config — git-ignored, managed by the agent
-├── config.example.json  # Committed template — update when adding new config keys
+├── server.js          # All MCP tools and resources (single-file server)
+├── .env               # Your local config — git-ignored, never committed
+├── .env.example       # Template — commit this when adding new variables
 ├── package.json
 └── README.md
 ```
 
 ### Adding a New Tool
 
-1. **Define the tool** in `server.js` using `server.tool()`:
+1. Define the tool in `server.js` using `server.tool()`:
 
 ```js
 server.tool(
   "my_tool_name",
-  "What this tool does (shown to AI)",
+  "What this tool does (shown to the AI)",
   {
-    component: z.enum(["tm", "acp", "gw"]).describe("Which component"),
+    component: z.enum(["tm", "acp", "gw", "km"]).describe("Which component"),
     dryRun:    z.boolean().default(false).describe("Preview without executing"),
   },
   async ({ component, dryRun }) => {
@@ -347,16 +386,20 @@ server.tool(
 );
 ```
 
-2. `node --check server.js` to validate syntax.
-3. Update `config.example.json` if new config keys are needed.
-4. Add a row to the **Available Tools** table and an example prompt.
+2. Validate syntax: `node --check server.js` (or `npx @modelcontextprotocol/inspector node server.js` for interactive testing)
+3. Add a `.env.example` entry if new environment variables are needed
+4. Add a row to the **Available Tools** table in `README.md`
 
 ### Conventions
 
-- Return `{ content: [{ type: "text", text: "..." }] }` for all responses
-- Emoji status prefixes: `✅` success · `❌` error · `⚠️` warning · `⏭️` skipped · `🛑` stopped
-- Poll in **2-second intervals** for long-running operations
-- Always check `isRunning(key)` before starting/stopping
+| Convention | Detail |
+|-----------|--------|
+| Response format | `{ content: [{ type: "text", text: "..." }] }` |
+| Status prefixes | `✅` success · `❌` error · `⚠️` warning · `⏭️` skipped · `🛑` stopped |
+| Long operations | Poll every 2 seconds, show progress |
+| Before start/stop | Always call `isRunning(key)` first |
+| Env var names | `APIM_` prefix, `SCREAMING_SNAKE_CASE` |
+| New config values | Add to `.env.example` with a comment, add to `buildConfig()` in `server.js` |
 
 ### Adding a Resource
 
@@ -373,17 +416,17 @@ server.resource(
 
 ### Branch Strategy
 
-| Branch | Purpose | PR target |
-|--------|---------|-----------|
-| `main` | 4-node topology — source of truth | Open PRs here |
-| `cp-tm-gw-km` | Stable 4-node snapshot | Synced from `main` |
-| `cp-tm-gw` | 3-node snapshot (no KM) | Synced from `main` |
+| Branch | Purpose |
+|--------|---------|
+| `main` | 4-node topology — source of truth, open PRs here |
+| `cp-tm-gw-km` | Stable 4-node snapshot, synced from `main` |
+| `cp-tm-gw` | 3-node snapshot (no KM), synced from `main` |
 
 ### Testing
 
 ```bash
-node --check server.js                             # syntax check
-npx @modelcontextprotocol/inspector node server.js # browser UI for manual tool calls
+node --check server.js                              # syntax check
+npx @modelcontextprotocol/inspector node server.js  # interactive browser UI
 ```
 
 ---
@@ -391,47 +434,3 @@ npx @modelcontextprotocol/inspector node server.js # browser UI for manual tool 
 ## License
 
 MIT
-
----
-
-## Changelog
-
-### v1.8.0 — Config Propagation & Diagnostics Control
-- New `apply_config` tool: generates and writes `deployment.toml` for each component from `config.json` values (MySQL host/port, DB names/users/passwords). Only `deployment.toml` is modified — no other files touched. Port offsets are FIXED per component (ACP:0, GW:1, TM:2, KM:3). Tested on all 4 nodes.
-- New `stop_diagnostics` tool: stops `org.wso2.diagnostics.DiagnosticsApp` that auto-starts with each component. Finds process by `-Dapp.home=<component>/diagnostics-tool` path; SIGTERM → SIGKILL fallback.
-- New `toggle_diagnostics_startup` tool: permanently disable/enable the auto-start of the diagnostics agent by commenting/uncommenting the launch line in each component's startup shell script. Use `action=disable` to prevent it launching on next start; `action=enable` to restore it.
-- New `tail_logs` tool: opens a new terminal window running `tail -f` on a component's log file and returns immediately. Cross-platform: macOS Terminal (AppleScript), Linux (gnome-terminal → konsole → xfce4-terminal → xterm), Windows PowerShell. Supports `errors_only` filter.
-- `configure`: auto-sets `zips.km = zips.acp` when `zipAcp` is provided (KM always uses the ACP archive)
-- `extract_components`: prefix-based zip discovery (`wso2am-tm-*.zip`) — U2 level suffix in filename is ignored; KM prefix mapped to `wso2am-acp-*`
-- `get_deployment_info`: port offsets labelled FIXED with deployment.toml `[server]` example; databases now read from live CONFIG; `&amp;` escaping documented for multi-param JDBC URLs
-- Getting Started flow updated: configure → ZIPs → extract → JDBC → DB → **apply_config** → start
-
-### v1.6.0 — Agent-managed Configuration
-- New `configure` tool: agent writes `config.json` from conversation — users no longer need to edit it manually
-- Interactive credential and conflict handling in `apply_updates` / `revert_updates` (spawn-based, auto-feeds stdin)
-- `conflictResolution` parameter: `keep-local` (default) or `use-update`
-- README rewritten: removed redundant setup steps, merged Quick Start into Getting Started, removed duplicate client registration sections
-
-### v1.5.0 — Automated U2 Tool Setup
-- New `setup_update_tool` tool: runs bundled `bin/update_tool_setup.sh` for all components, downloads the correct binary for the current OS/arch
-- `apply_updates` / `revert_updates` resolve binary per-component from its own `bin/` dir
-
-### v1.4.0 — WSO2 U2 Update Tools
-- New `check_update_level`, `apply_updates`, `revert_updates` tools
-- `config.json` gains `updates.toolPath` and `updates.credentials` section
-
-### v1.3.0 — Extract Components + JDBC Driver Setup
-- New `extract_components` tool: unzips TM/ACP/GW/KM with automatic KM rename
-- New `setup_jdbc_driver` tool: downloads MySQL connector from Maven Central
-
-### v1.2.0 — Graceful Stop + start_all / stop_all
-- `stop_component` uses shutdown script instead of `kill -9`, polls for exit
-- New `stop_all` (GW → ACP → KM → TM) and `start_all` (TM → KM → ACP → GW) tools
-
-### v1.1.0 — Key Manager Node
-- Separate KM node extracted from ACP zip (`bin/key-manager.sh`)
-- KM `deployment.toml` with `server_role = "key-manager"`, offset 3
-
-### v1.0.0 — Initial Release
-- Tools: start/stop/check_status/view_logs/setup_databases/get_deployment_info
-- Resources: `apim://config`, `apim://toml/{acp,tm,gw}`
