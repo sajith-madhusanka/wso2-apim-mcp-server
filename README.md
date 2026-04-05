@@ -73,7 +73,7 @@ npm install
 ### 2. Configure environment variables
 
 ```bash
-cp .env.example .env
+cp env.example .env
 ```
 
 Edit `.env` with your values:
@@ -343,18 +343,6 @@ max_connections=500
 
 ---
 
-## Known Issues & Fixes
-
-| Issue | Fix |
-|-------|-----|
-| Space in directory path breaks bash sessions | Use underscores in directory names (e.g. `distributed_deployment`) |
-| `&` in JDBC URL causes XML parse error | Use `?useSSL=false` only; set `autoReconnect` in `[pool_options]` |
-| `create_admin_account` must be `true` on all nodes | Shared DB has no admin until the first node creates it |
-| Stale `.metadata` blocks config regeneration | Delete `repository/resources/conf/.metadata/metadata_*.properties` before restart |
-| `stop_all` reports "already stopped" for running nodes | Fixed: uses `pgrep -f` (kernel-level full cmdline) instead of `ps ax` (truncated display) |
-
----
-
 ## Contributing
 
 ### Project Structure
@@ -363,7 +351,7 @@ max_connections=500
 wso2-apim-mcp-server/
 ├── server.js          # All MCP tools and resources (single-file server)
 ├── .env               # Your local config — git-ignored, never committed
-├── .env.example       # Template — commit this when adding new variables
+├── env.example       # Template — commit this when adding new variables
 ├── package.json
 └── README.md
 ```
@@ -387,7 +375,7 @@ server.tool(
 ```
 
 2. Validate syntax: `node --check server.js` (or `npx @modelcontextprotocol/inspector node server.js` for interactive testing)
-3. Add a `.env.example` entry if new environment variables are needed
+3. Add a `env.example` entry if new environment variables are needed
 4. Add a row to the **Available Tools** table in `README.md`
 
 ### Conventions
@@ -399,7 +387,7 @@ server.tool(
 | Long operations | Poll every 2 seconds, show progress |
 | Before start/stop | Always call `isRunning(key)` first |
 | Env var names | `APIM_` prefix, `SCREAMING_SNAKE_CASE` |
-| New config values | Add to `.env.example` with a comment, add to `buildConfig()` in `server.js` |
+| New config values | Add to `env.example` with a comment, add to `buildConfig()` in `server.js` |
 
 ### Adding a Resource
 

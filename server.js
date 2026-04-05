@@ -1,6 +1,6 @@
 // WSO2 APIM 4.6.0 Distributed Deployment — MCP Server
 // Configuration is loaded from a .env file next to this file.
-// Copy .env.example → .env and fill in your values, then source it:
+// Copy env.example → .env and fill in your values, then source it:
 //   source .env
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
